@@ -1,13 +1,24 @@
 import { API_URL } from "./api";
 
+export type ModuleRole =
+  | "MEMBRE"
+  | "DIRIGEANT"
+  | "DIRIGEANT_LEADER"
+  | "DIRIGEANT_COORDINATEUR"
+  | "LEADER"
+  | "SECRETARIAT";
+
+// Mirrors com.excellence.back.donation.auth.dto.MeResponse
 export type ChurchUser = {
   id: string;
   email: string;
   fullName: string;
-  role: "USER" | "MEMBER" | "LEADER" | "ADMIN" | "SUPER_ADMIN";
-  leaderLevel?: "JUNIOR" | "SENIOR" | null;
+  superAdmin: boolean;
+  donationRole?: ModuleRole | null;
+  goalRole?: ModuleRole | null;
   ministryId?: string | null;
-  unitId?: string | null;
+  donationUnitId?: string | null;
+  donationZoneId?: string | null;
   active: boolean;
 };
 

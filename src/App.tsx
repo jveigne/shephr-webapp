@@ -4,16 +4,10 @@ import { AuthProvider } from "@/context/AuthContext";
 import { ToastProvider } from "@/context/ToastContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { AppShell } from "@/components/AppShell";
+import { Placeholder } from "@/components/Placeholder";
 
 import LoginPage from "@/pages/Login";
-import DashboardPage from "@/pages/Dashboard";
-import DonationsPage from "@/pages/Donations";
 import MinisteresPage from "@/pages/Ministeres";
-import LocalitesPage from "@/pages/Localites";
-import UnitesPage from "@/pages/Unites";
-import UsersPage from "@/pages/Users";
-import HierarchyPage from "@/pages/Hierarchy";
-import ExportsPage from "@/pages/Exports";
 import SettingsPage from "@/pages/Settings";
 
 const queryClient = new QueryClient();
@@ -33,20 +27,53 @@ export default function App() {
         <AuthProvider>
           <BrowserRouter>
             <Routes>
-              <Route path="/" element={<Navigate to="/dashboard" replace />} />
+              <Route path="/" element={<Navigate to="/ministeres" replace />} />
               <Route path="/login" element={<LoginPage />} />
 
-              <Route path="/dashboard"  element={<Shielded><DashboardPage  /></Shielded>} />
-              <Route path="/donations"  element={<Shielded><DonationsPage  /></Shielded>} />
+              {/* Back-office JExcellence — cross-tenant, SUPER_ADMIN only */}
               <Route path="/ministeres" element={<Shielded><MinisteresPage /></Shielded>} />
-              <Route path="/localites"  element={<Shielded><LocalitesPage  /></Shielded>} />
-              <Route path="/unites"     element={<Shielded><UnitesPage     /></Shielded>} />
-              <Route path="/users"      element={<Shielded><UsersPage      /></Shielded>} />
-              <Route path="/hierarchy"  element={<Shielded><HierarchyPage  /></Shielded>} />
-              <Route path="/exports"    element={<Shielded><ExportsPage    /></Shielded>} />
-              <Route path="/settings"   element={<Shielded><SettingsPage   /></Shielded>} />
+              <Route
+                path="/abonnements"
+                element={
+                  <Shielded>
+                    <Placeholder
+                      title="Abonnements"
+                      crumbs={["JExcellence", "Abonnements"]}
+                      description="Activer/désactiver les modules payants (Donations, Member Care) par ministère, et le prix dégressif sur cumul."
+                      endpointHint="GET/POST /admin/subscriptions · GET/PATCH /admin/modules"
+                    />
+                  </Shielded>
+                }
+              />
+              <Route
+                path="/goals"
+                element={
+                  <Shielded>
+                    <Placeholder
+                      title="Goals globaux"
+                      crumbs={["JExcellence", "Goals globaux"]}
+                      description="Créer le But Quinquennal et ses catégories, l'affecter aux ministères."
+                      endpointHint="UC-SUP-09 · création Goal global"
+                    />
+                  </Shielded>
+                }
+              />
+              <Route
+                path="/audit"
+                element={
+                  <Shielded>
+                    <Placeholder
+                      title="Journal d'audit"
+                      crumbs={["JExcellence", "Audit"]}
+                      description="Traçabilité des actions sensibles (créations de ministères, abonnements, promotions)."
+                      endpointHint="🆕 GET /admin/audit-logs (Lot 6.3)"
+                    />
+                  </Shielded>
+                }
+              />
+              <Route path="/settings" element={<Shielded><SettingsPage /></Shielded>} />
 
-              <Route path="*" element={<Navigate to="/dashboard" replace />} />
+              <Route path="*" element={<Navigate to="/ministeres" replace />} />
             </Routes>
           </BrowserRouter>
         </AuthProvider>

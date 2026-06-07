@@ -6,7 +6,7 @@ interface AuthState {
   token: string | null;
   loading: boolean;
   isAuthenticated: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<ChurchUser | null>;
   logout: () => void;
 }
 
@@ -51,6 +51,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(me);
       localStorage.setItem(USER_KEY, JSON.stringify(me));
     }
+    return me;
   };
 
   const logout = () => {

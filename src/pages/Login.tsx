@@ -21,9 +21,13 @@ export default function LoginPage() {
     setError("");
     setLoading(true);
     try {
-      await login(email, password);
-      push({ kind: "ok", title: "Bienvenue", msg: "Vous êtes connecté à Shephr." });
-      navigate("/dashboard");
+      const me = await login(email, password);
+      if (!me?.superAdmin) {
+        setError("Accès réservé à l'administration JExcellence (SUPER_ADMIN).");
+        return;
+      }
+      push({ kind: "ok", title: "Bienvenue", msg: "Back-office JExcellence." });
+      navigate("/ministeres");
     } catch (err: any) {
       setError(err.message || "Erreur lors de la connexion.");
     } finally {
@@ -130,7 +134,7 @@ export default function LoginPage() {
 
           <div className="reserved">
             <Icons.Shield size={16} />
-            <span>Accès réservé aux administrateurs. Les membres et dirigeants utilisent l'application mobile Shephr.</span>
+            <span>Back-office réservé à l'administration JExcellence (SUPER_ADMIN). Les ministères utilisent l'Espace ministère et l'app mobile.</span>
           </div>
         </div>
       </div>
