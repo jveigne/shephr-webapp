@@ -9,6 +9,8 @@ import { Placeholder } from "@/components/Placeholder";
 
 import LoginPage from "@/pages/Login";
 import MinisteresPage from "@/pages/Ministeres";
+import StructurePage from "@/pages/Structure";
+import UtilisateursPage from "@/pages/Utilisateurs";
 import AbonnementsPage from "@/pages/Abonnements";
 import AuditPage from "@/pages/Audit";
 import SettingsPage from "@/pages/Settings";
@@ -47,6 +49,8 @@ export default function App() {
 
               {/* Back-office JExcellence — cross-tenant, SUPER_ADMIN only */}
               <Route path="/ministeres" element={<Shielded><MinisteresPage /></Shielded>} />
+              <Route path="/structure" element={<Shielded><StructurePage /></Shielded>} />
+              <Route path="/utilisateurs" element={<Shielded><UtilisateursPage /></Shielded>} />
               <Route path="/abonnements" element={<Shielded><AbonnementsPage /></Shielded>} />
               <Route
                 path="/goals"

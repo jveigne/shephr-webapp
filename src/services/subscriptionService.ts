@@ -96,6 +96,17 @@ export function suspendSubscription(id: string): Promise<SubscriptionResponse> {
   return apiFetch<SubscriptionResponse>(`/admin/subscriptions/${id}/deactivate`, { method: "POST" });
 }
 
+/** Réactive un abonnement suspendu/expiré avec une nouvelle date de validité (endDate obligatoire). */
+export function reactivateSubscription(
+  id: string,
+  body: { endDate: string; startDate?: string },
+): Promise<SubscriptionResponse> {
+  return apiFetch<SubscriptionResponse>(`/admin/subscriptions/${id}/reactivate`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 // ---- Pricing (devis) — mirrors subscription/pricing/dto ----
 export interface ModulePriceLine {
   moduleCode: string;
@@ -157,4 +168,45 @@ export function listUnits(ministryId: string): Promise<OrgEntityOption[]> {
   return apiFetch<Array<{ id: string; name: string; localityName: string | null }>>(
     `/api/org/admin/units?ministryId=${ministryId}`,
   ).then((rows) => rows.map((r) => ({ id: r.id, label: r.localityName ? `${r.name} — ${r.localityName}` : r.name })));
+}
+
+// ---- Org hierarchy (avec IDs parents) — pour reconstruire l'arbre côté front ----
+export interface OrgCountryNode { id: string; name: string; code: string }
+export interface OrgZoneNode { id: string; name: string; countryId: string }
+export interface OrgLocalityNode { id: string; name: string; zoneId: string | null }
+export interface OrgUnitNode { id: string; name: string; localityId: string | null; type: string }
+
+export interface MinistryOrg {
+  countries: OrgCountryNode[];
+  zones: OrgZoneNode[];
+  localities: OrgLocalityNode[];
+  units: OrgUnitNode[];
+}
+
+/** Charge toute la structure org d'un ministère (pays → zones → localités → unités). */
+export async function fetchMinistryOrg(ministryId: string): Promise<MinistryOrg> {
+  const countries = await apiFetch<Array<{ id: string; name: string; code: string }>>(
+    `/api/org/admin/countries?ministryId=${ministryId}`,
+  );
+  const zonesNested = await Promise.all(
+    countries.map((c) =>
+      apiFetch<Array<{ id: string; name: string; countryId: string }>>(
+        `/api/org/admin/zones?countryId=${c.id}`,
+      ),
+    ),
+  );
+  const [localities, units] = await Promise.all([
+    apiFetch<Array<{ id: string; name: string; zoneId: string | null }>>(
+      `/api/org/admin/localities?ministryId=${ministryId}`,
+    ),
+    apiFetch<Array<{ id: string; name: string; localityId: string | null; type: string }>>(
+      `/api/org/admin/units?ministryId=${ministryId}`,
+    ),
+  ]);
+  return {
+    countries: countries.map((c) => ({ id: c.id, name: c.name, code: c.code })),
+    zones: zonesNested.flat().map((z) => ({ id: z.id, name: z.name, countryId: z.countryId })),
+    localities: localities.map((l) => ({ id: l.id, name: l.name, zoneId: l.zoneId })),
+    units: units.map((u) => ({ id: u.id, name: u.name, localityId: u.localityId, type: u.type })),
+  };
 }

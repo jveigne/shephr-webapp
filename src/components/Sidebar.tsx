@@ -10,7 +10,11 @@ type NavSection = { sectionKey: string; items: NavItem[] };
 const NAV: NavSection[] = [
   {
     sectionKey: "nav.clients",
-    items: [{ id: "ministeres", labelKey: "nav.ministries", icon: "Building", path: "/ministeres" }],
+    items: [
+      { id: "ministeres", labelKey: "nav.ministries", icon: "Building", path: "/ministeres" },
+      { id: "structure", labelKey: "nav.structure", icon: "Hierarchy", path: "/structure" },
+      { id: "utilisateurs", labelKey: "nav.users", icon: "Users", path: "/utilisateurs" },
+    ],
   },
   {
     sectionKey: "nav.billing",
