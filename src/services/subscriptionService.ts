@@ -173,12 +173,14 @@ export function listUnits(ministryId: string): Promise<OrgEntityOption[]> {
 // ---- Org hierarchy (avec IDs parents) — pour reconstruire l'arbre côté front ----
 export interface OrgCountryNode { id: string; name: string; code: string }
 export interface OrgZoneNode { id: string; name: string; countryId: string }
-export interface OrgLocalityNode { id: string; name: string; zoneId: string | null }
+export interface OrgTeamNode { id: string; name: string; zoneId: string }
+export interface OrgLocalityNode { id: string; name: string; zoneId: string | null; teamId: string | null }
 export interface OrgUnitNode { id: string; name: string; localityId: string | null; type: string }
 
 export interface MinistryOrg {
   countries: OrgCountryNode[];
   zones: OrgZoneNode[];
+  teams: OrgTeamNode[];
   localities: OrgLocalityNode[];
   units: OrgUnitNode[];
 }
@@ -195,8 +197,16 @@ export async function fetchMinistryOrg(ministryId: string): Promise<MinistryOrg>
       ),
     ),
   );
+  const zones = zonesNested.flat();
+  const teamsNested = await Promise.all(
+    zones.map((z) =>
+      apiFetch<Array<{ id: string; name: string; zoneId: string }>>(
+        `/api/org/admin/teams?zoneId=${z.id}`,
+      ),
+    ),
+  );
   const [localities, units] = await Promise.all([
-    apiFetch<Array<{ id: string; name: string; zoneId: string | null }>>(
+    apiFetch<Array<{ id: string; name: string; zoneId: string | null; teamId: string | null }>>(
       `/api/org/admin/localities?ministryId=${ministryId}`,
     ),
     apiFetch<Array<{ id: string; name: string; localityId: string | null; type: string }>>(
@@ -205,8 +215,9 @@ export async function fetchMinistryOrg(ministryId: string): Promise<MinistryOrg>
   ]);
   return {
     countries: countries.map((c) => ({ id: c.id, name: c.name, code: c.code })),
-    zones: zonesNested.flat().map((z) => ({ id: z.id, name: z.name, countryId: z.countryId })),
-    localities: localities.map((l) => ({ id: l.id, name: l.name, zoneId: l.zoneId })),
+    zones: zones.map((z) => ({ id: z.id, name: z.name, countryId: z.countryId })),
+    teams: teamsNested.flat().map((tm) => ({ id: tm.id, name: tm.name, zoneId: tm.zoneId })),
+    localities: localities.map((l) => ({ id: l.id, name: l.name, zoneId: l.zoneId, teamId: l.teamId })),
     units: units.map((u) => ({ id: u.id, name: u.name, localityId: u.localityId, type: u.type })),
   };
 }

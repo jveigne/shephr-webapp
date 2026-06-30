@@ -11,14 +11,14 @@ import { ResponsablesDrawer } from "@/components/ResponsablesDrawer";
 import { listMinistries, type MinistryResponse } from "@/services/ministryService";
 import { listMinistryUsers, type AdminUserResponse } from "@/services/userService";
 import {
-  createCountry, createLocality, createUnit, createZone,
-  deleteCountry, deleteLocality, deleteUnit, deleteZone,
+  createCountry, createLocality, createTeam, createUnit, createZone,
+  deleteCountry, deleteLocality, deleteTeam, deleteUnit, deleteZone,
   fetchMinistryStructure, listContinents,
-  updateCountry, updateLocality, updateUnit, updateZone,
+  updateCountry, updateLocality, updateTeam, updateUnit, updateZone,
 } from "@/services/orgService";
 
 const CHILD: Partial<Record<NodeLevel, NodeLevel>> = {
-  MINISTRY: "COUNTRY", COUNTRY: "ZONE", ZONE: "LOCALITY", LOCALITY: "UNIT",
+  MINISTRY: "COUNTRY", COUNTRY: "ZONE", ZONE: "TEAM", TEAM: "LOCALITY", LOCALITY: "UNIT",
 };
 
 type Editing =
@@ -129,8 +129,11 @@ export default function StructurePage() {
             return createCountry({ ministryId, continentId: v.continentId, code: v.code.trim(), name: v.name.trim(), nameEn: v.nameEn.trim(), defaultCurrency: v.defaultCurrency.trim() });
           case "ZONE":
             return createZone({ countryId: parent.id, name: v.name.trim(), description: v.description.trim() || undefined });
+          case "TEAM":
+            return createTeam({ zoneId: parent.id, name: v.name.trim() });
           case "LOCALITY":
-            return createLocality({ ministryId, zoneId: parent.id, name: v.name.trim(), country: v.country.trim() || undefined });
+            // La localité s'insère désormais sous une TEAM (zone effective dérivée côté backend).
+            return createLocality({ ministryId, teamId: parent.id, name: v.name.trim(), country: v.country.trim() || undefined });
           case "UNIT":
             return createUnit({ ministryId, localityId: parent.id, name: v.name.trim(), type: v.type });
         }
@@ -141,6 +144,8 @@ export default function StructurePage() {
             return updateCountry(id, { continentId: v.continentId, name: v.name.trim(), nameEn: v.nameEn.trim(), defaultCurrency: v.defaultCurrency.trim() });
           case "ZONE":
             return updateZone(id, { name: v.name.trim(), description: v.description.trim() });
+          case "TEAM":
+            return updateTeam(id, { name: v.name.trim() });
           case "LOCALITY":
             return updateLocality(id, { name: v.name.trim(), country: v.country.trim() });
           case "UNIT":
@@ -157,6 +162,7 @@ export default function StructurePage() {
       switch (node.level) {
         case "COUNTRY": return deleteCountry(node.id);
         case "ZONE": return deleteZone(node.id);
+        case "TEAM": return deleteTeam(node.id);
         case "LOCALITY": return deleteLocality(node.id);
         case "UNIT": return deleteUnit(node.id);
       }
@@ -205,7 +211,7 @@ export default function StructurePage() {
         node={responsablesNode}
         ministryId={ministryId}
         users={users}
-        org={structureQ.data ? { countries: structureQ.data.countries, zones: structureQ.data.zones, units: structureQ.data.units } : undefined}
+        org={structureQ.data ? { countries: structureQ.data.countries, zones: structureQ.data.zones, teams: structureQ.data.teams, units: structureQ.data.units } : undefined}
         onClose={() => setResponsablesNode(null)}
       />
 
@@ -259,6 +265,12 @@ export default function StructurePage() {
                   <Input value={values.description} onChange={(e) => setValues({ ...values, description: e.target.value })} />
                 </Field>
               </>
+            )}
+
+            {editing.level === "TEAM" && (
+              <Field label={t("structure.name")}>
+                <Input value={values.name} onChange={(e) => setValues({ ...values, name: e.target.value })} />
+              </Field>
             )}
 
             {editing.level === "LOCALITY" && (

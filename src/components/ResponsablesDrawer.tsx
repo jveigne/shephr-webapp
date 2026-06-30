@@ -13,11 +13,12 @@ import {
 } from "@/services/userService";
 
 // Niveaux où un utilisateur peut être rattaché (LOCALITY exclu).
-const LEVELS: NodeLevel[] = ["UNIT", "ZONE", "COUNTRY", "MINISTRY"];
+const LEVELS: NodeLevel[] = ["UNIT", "TEAM", "ZONE", "COUNTRY", "MINISTRY"];
 
 export interface StructureOrg {
   countries: { id: string; name: string; code: string }[];
   zones: { id: string; name: string }[];
+  teams: { id: string; name: string }[];
   units: { id: string; name: string }[];
 }
 
@@ -60,6 +61,7 @@ export function ResponsablesDrawer({
 
   const entityOptions = useMemo(() => {
     if (editLevel === "UNIT") return org?.units ?? [];
+    if (editLevel === "TEAM") return org?.teams ?? [];
     if (editLevel === "ZONE") return org?.zones ?? [];
     if (editLevel === "COUNTRY") return (org?.countries ?? []).map((c) => ({ id: c.id, name: `${c.name} (${c.code})` }));
     return [];

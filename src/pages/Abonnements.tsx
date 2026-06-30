@@ -18,6 +18,7 @@ import {
   type BillingPeriod,
   type PricingQuoteResponse,
   type PricingZone,
+  type SubscriptionScope,
   type SubscriptionResponse,
 } from "@/services/subscriptionService";
 
@@ -176,7 +177,7 @@ export default function AbonnementsPage() {
   const quoteM = useMutation({
     mutationFn: () =>
       pricingQuote({
-        scope: activateNode!.level,
+        scope: activateNode!.level as SubscriptionScope,
         scopeEntityId: activateNode!.id,
         moduleCodes: form.modules,
         zone: form.zone,
@@ -204,7 +205,7 @@ export default function AbonnementsPage() {
       createSubscription({
         moduleCodes: form.modules,
         ministryId,
-        scope: activateNode!.level,
+        scope: activateNode!.level as SubscriptionScope,
         scopeEntityId: activateNode!.id,
         tier: quote?.tier ?? null,
         pricingZone: form.zone,
@@ -359,9 +360,12 @@ export default function AbonnementsPage() {
               </div>
             )}
 
-            <Button variant="primary" iconL={<Icons.Plus size={15} />} onClick={() => openActivate(drawerNode)}>
-              {t("subscriptions.activateHere")}
-            </Button>
+            {/* Le niveau Team n'est pas un périmètre d'abonnement (scope MINISTRY/COUNTRY/ZONE/LOCALITY/UNIT). */}
+            {drawerNode.level !== "TEAM" && (
+              <Button variant="primary" iconL={<Icons.Plus size={15} />} onClick={() => openActivate(drawerNode)}>
+                {t("subscriptions.activateHere")}
+              </Button>
+            )}
           </div>
         )}
       </Drawer>
