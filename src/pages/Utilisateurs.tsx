@@ -46,7 +46,7 @@ export default function UtilisateursPage() {
   const org = structureQ.data;
   const unitName = useMemo(() => new Map((org?.units ?? []).map((u) => [u.id, u.name])), [org]);
   const zoneName = useMemo(() => new Map((org?.zones ?? []).map((z) => [z.id, z.name])), [org]);
-  const teamName = useMemo(() => new Map((org?.teams ?? []).map((tm) => [tm.id, tm.name])), [org]);
+  const cityName = useMemo(() => new Map((org?.localities ?? []).map((l) => [l.id, l.name])), [org]);
   const countryName = useMemo(() => new Map((org?.countries ?? []).map((c) => [c.id, c.name])), [org]);
   const userName = useMemo(() => new Map((usersQ.data ?? []).map((u) => [u.id, u.fullName])), [usersQ.data]);
   // Unité → zone (via localité) pour filtrer « tous les users de la zone ».
@@ -57,7 +57,7 @@ export default function UtilisateursPage() {
 
   const attachmentLabel = (u: AdminUserResponse): string => {
     if (u.goalZoneId) return `${t("subscriptions.level.ZONE")} · ${zoneName.get(u.goalZoneId) ?? "—"}`;
-    if (u.goalTeamId) return `${t("subscriptions.level.TEAM")} · ${teamName.get(u.goalTeamId) ?? "—"}`;
+    if (u.goalCityId) return `${t("subscriptions.level.LOCALITY")} · ${cityName.get(u.goalCityId) ?? "—"}`;
     if (u.goalUnitId) return `${t("subscriptions.level.UNIT")} · ${unitName.get(u.goalUnitId) ?? "—"}`;
     if (u.goalCountryIds?.length) return `${t("subscriptions.level.COUNTRY")} · ${u.goalCountryIds.map((c) => countryName.get(c) ?? "—").join(", ")}`;
     if (u.goalRole === "LEADER" || u.goalRole === "SECRETARIAT") return t("subscriptions.level.MINISTRY");

@@ -1,9 +1,11 @@
 import { API_URL } from "./api";
 
+// Aligné sur com.excellence.back.auth.ModuleRole (correction T1 : DIRIGEANT_LEADER n'existe plus).
 export type ModuleRole =
   | "MEMBRE"
+  | "DIRIGEANT_UNITE"
   | "DIRIGEANT"
-  | "DIRIGEANT_LEADER"
+  | "DIRIGEANT_SENIOR"
   | "DIRIGEANT_COORDINATEUR"
   | "LEADER"
   | "SECRETARIAT";

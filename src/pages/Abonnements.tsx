@@ -360,12 +360,9 @@ export default function AbonnementsPage() {
               </div>
             )}
 
-            {/* Le niveau Team n'est pas un périmètre d'abonnement (scope MINISTRY/COUNTRY/ZONE/LOCALITY/UNIT). */}
-            {drawerNode.level !== "TEAM" && (
-              <Button variant="primary" iconL={<Icons.Plus size={15} />} onClick={() => openActivate(drawerNode)}>
-                {t("subscriptions.activateHere")}
-              </Button>
-            )}
+            <Button variant="primary" iconL={<Icons.Plus size={15} />} onClick={() => openActivate(drawerNode)}>
+              {t("subscriptions.activateHere")}
+            </Button>
           </div>
         )}
       </Drawer>

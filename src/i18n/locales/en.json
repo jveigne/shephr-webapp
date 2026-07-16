@@ -163,11 +163,10 @@
     "stateSuspended": "Suspended",
     "level": {
       "MINISTRY": "Ministry",
-      "COUNTRY": "Country",
-      "ZONE": "Zone",
-      "TEAM": "Team",
-      "LOCALITY": "Locality",
-      "UNIT": "Unit"
+      "COUNTRY": "Nation",
+      "ZONE": "Region",
+      "LOCALITY": "City",
+      "UNIT": "House assembly"
     },
     "nodeSubsHere": "Subscriptions set at this level",
     "nodeNoSubsHere": "No subscription set directly here.",
@@ -313,10 +312,12 @@
     "currency": "Currency",
     "description": "Description",
     "countryLabel": "Country (label)",
-    "unitType": "Unit type",
-    "typeCenter": "Center",
-    "typeAssembly": "Assembly",
-    "countrySelect": "Country"
+    "countrySelect": "Country",
+    "regionLabel": "Level-2 label",
+    "regionLabelHint": "\"Region\" (e.g. Cameroon) or \"State\" (e.g. USA) — applies to every region of this nation.",
+    "regionLabelRegion": "Region",
+    "regionLabelState": "State",
+    "assemblyCount": "{{count}} assemblies"
   },
   "responsables": {
     "title": "Leaders",

@@ -163,11 +163,10 @@
     "stateSuspended": "Suspendu",
     "level": {
       "MINISTRY": "Ministère",
-      "COUNTRY": "Pays",
-      "ZONE": "Zone",
-      "TEAM": "Team",
-      "LOCALITY": "Localité",
-      "UNIT": "Unité"
+      "COUNTRY": "Nation",
+      "ZONE": "Région",
+      "LOCALITY": "Ville",
+      "UNIT": "Assemblée de maison"
     },
     "nodeSubsHere": "Abonnements posés sur ce niveau",
     "nodeNoSubsHere": "Aucun abonnement posé directement ici.",
@@ -313,10 +312,12 @@
     "currency": "Devise",
     "description": "Description",
     "countryLabel": "Pays (libellé)",
-    "unitType": "Type d'unité",
-    "typeCenter": "Centre",
-    "typeAssembly": "Assemblée",
-    "countrySelect": "Pays"
+    "countrySelect": "Pays",
+    "regionLabel": "Libellé du niveau 2",
+    "regionLabelHint": "« Région » (ex. Cameroun) ou « État » (ex. USA) — s’applique à toutes les régions de cette nation.",
+    "regionLabelRegion": "Région",
+    "regionLabelState": "État",
+    "assemblyCount": "{{count}} assemblées"
   },
   "responsables": {
     "title": "Responsables",

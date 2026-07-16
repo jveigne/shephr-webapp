@@ -15,13 +15,13 @@ export interface AdminUserResponse {
   donationRole: ModuleRole | null;
   donationUnitId: string | null;
   donationZoneId: string | null;
-  donationTeamId: string | null;
+  donationCityId: string | null;
   donationUnitIds: string[];
   donationCountryIds: string[];
   goalRole: ModuleRole | null;
   goalUnitId: string | null;
   goalZoneId: string | null;
-  goalTeamId: string | null;
+  goalCityId: string | null;
   goalUnitIds: string[];
   goalCountryIds: string[];
   coordinatedCountryIds: string[];
@@ -40,7 +40,7 @@ export interface InviteUserRequest {
   goalRole?: ModuleRole;
   goalUnitId?: string;
   goalZoneId?: string;
-  goalTeamId?: string;
+  goalCityId?: string;
   goalUnitIds?: string[];
   goalCountryIds?: string[];
 }
@@ -59,7 +59,7 @@ export interface UpdateUserRequest {
   goalRole?: ModuleRole;
   goalUnitId?: string;
   goalZoneId?: string;
-  goalTeamId?: string;
+  goalCityId?: string;
   goalUnitIds?: string[];
   goalCountryIds?: string[];
   active?: boolean;

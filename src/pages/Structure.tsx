@@ -11,14 +11,16 @@ import { ResponsablesDrawer } from "@/components/ResponsablesDrawer";
 import { listMinistries, type MinistryResponse } from "@/services/ministryService";
 import { listMinistryUsers, type AdminUserResponse } from "@/services/userService";
 import {
-  createCountry, createLocality, createTeam, createUnit, createZone,
-  deleteCountry, deleteLocality, deleteTeam, deleteUnit, deleteZone,
-  fetchMinistryStructure, listContinents,
-  updateCountry, updateLocality, updateTeam, updateUnit, updateZone,
+  createCountry, createLocality, createUnit, createZone,
+  deleteCountry, deleteLocality, deleteUnit, deleteZone,
+  fetchMinistryStructure, listContinents, listNationNodes,
+  updateCountry, updateLocality, updateNodeRegionLabel, updateUnit, updateZone,
+  type RegionLabel,
 } from "@/services/orgService";
 
+// Chantier B : arbre 4 niveaux Nation → Région/État → Ville → Assemblée (plus de Team).
 const CHILD: Partial<Record<NodeLevel, NodeLevel>> = {
-  MINISTRY: "COUNTRY", COUNTRY: "ZONE", ZONE: "TEAM", TEAM: "LOCALITY", LOCALITY: "UNIT",
+  MINISTRY: "COUNTRY", COUNTRY: "ZONE", ZONE: "LOCALITY", LOCALITY: "UNIT",
 };
 
 type Editing =
@@ -33,10 +35,11 @@ interface FormValues {
   defaultCurrency: string;
   description: string;
   country: string;
-  type: "CENTER" | "ASSEMBLY";
+  /** Libellé du niveau 2 de la nation : « Région » ou « État » (Chantier B). */
+  regionLabel: RegionLabel;
 }
 const EMPTY_VALUES: FormValues = {
-  continentId: "", code: "", name: "", nameEn: "", defaultCurrency: "", description: "", country: "", type: "CENTER",
+  continentId: "", code: "", name: "", nameEn: "", defaultCurrency: "", description: "", country: "", regionLabel: "REGION",
 };
 
 export default function StructurePage() {
@@ -62,6 +65,13 @@ export default function StructurePage() {
     queryFn: () => listMinistryUsers(ministryId),
     enabled: !!ministryId,
   });
+  // Chantier B : libellé Région/État par nation (porté par le nœud NATION, même id que le pays).
+  const nationsQ = useQuery({ queryKey: ["nation-nodes"], queryFn: listNationNodes, enabled: !!ministryId });
+  const regionLabelByCountry = useMemo(() => {
+    const m = new Map<string, RegionLabel>();
+    for (const n of nationsQ.data ?? []) m.set(n.id, n.regionLabel ?? "REGION");
+    return m;
+  }, [nationsQ.data]);
   const users: AdminUserResponse[] = usersQ.data ?? [];
 
   const ministryName = useMemo(
@@ -113,7 +123,7 @@ export default function StructurePage() {
       defaultCurrency: d.defaultCurrency ?? "",
       description: d.description ?? "",
       country: d.country ?? "",
-      type: d.type ?? "CENTER",
+      regionLabel: regionLabelByCountry.get(node.id) ?? "REGION",
     });
     setEditing({ mode: "edit", level: node.level, node });
   };
@@ -125,35 +135,38 @@ export default function StructurePage() {
       if (editing.mode === "add") {
         const parent = editing.parent;
         switch (editing.level) {
-          case "COUNTRY":
-            return createCountry({ ministryId, continentId: v.continentId, code: v.code.trim(), name: v.name.trim(), nameEn: v.nameEn.trim(), defaultCurrency: v.defaultCurrency.trim() });
+          case "COUNTRY": {
+            const created = await createCountry({ ministryId, continentId: v.continentId, code: v.code.trim(), name: v.name.trim(), nameEn: v.nameEn.trim(), defaultCurrency: v.defaultCurrency.trim() });
+            // Chantier B : le libellé Région/État vit sur le nœud NATION (même id, miroir org_node).
+            await updateNodeRegionLabel(created.id, v.regionLabel).catch(() => undefined);
+            return created;
+          }
           case "ZONE":
             return createZone({ countryId: parent.id, name: v.name.trim(), description: v.description.trim() || undefined });
-          case "TEAM":
-            return createTeam({ zoneId: parent.id, name: v.name.trim() });
           case "LOCALITY":
-            // La localité s'insère désormais sous une TEAM (zone effective dérivée côté backend).
-            return createLocality({ ministryId, teamId: parent.id, name: v.name.trim(), country: v.country.trim() || undefined });
+            // Chantier B : la Ville s'insère directement sous la Région (teams dissoutes).
+            return createLocality({ ministryId, zoneId: parent.id, name: v.name.trim(), country: v.country.trim() || undefined });
           case "UNIT":
-            return createUnit({ ministryId, localityId: parent.id, name: v.name.trim(), type: v.type });
+            return createUnit({ ministryId, localityId: parent.id, name: v.name.trim() });
         }
       } else {
         const id = editing.node.id;
         switch (editing.level) {
-          case "COUNTRY":
-            return updateCountry(id, { continentId: v.continentId, name: v.name.trim(), nameEn: v.nameEn.trim(), defaultCurrency: v.defaultCurrency.trim() });
+          case "COUNTRY": {
+            const updated = await updateCountry(id, { continentId: v.continentId, name: v.name.trim(), nameEn: v.nameEn.trim(), defaultCurrency: v.defaultCurrency.trim() });
+            await updateNodeRegionLabel(id, v.regionLabel).catch(() => undefined);
+            return updated;
+          }
           case "ZONE":
             return updateZone(id, { name: v.name.trim(), description: v.description.trim() });
-          case "TEAM":
-            return updateTeam(id, { name: v.name.trim() });
           case "LOCALITY":
             return updateLocality(id, { name: v.name.trim(), country: v.country.trim() });
           case "UNIT":
-            return updateUnit(id, { name: v.name.trim(), type: v.type });
+            return updateUnit(id, { name: v.name.trim() });
         }
       }
     },
-    onSuccess: () => { invalidate(); closeForm(); push({ kind: "ok", title: t("structure.savedToast"), msg: "" }); },
+    onSuccess: () => { invalidate(); qc.invalidateQueries({ queryKey: ["nation-nodes"] }); closeForm(); push({ kind: "ok", title: t("structure.savedToast"), msg: "" }); },
     onError: (e: unknown) => push({ kind: "error", title: t("common.failure"), msg: e instanceof Error ? e.message : t("common.error") }),
   });
 
@@ -162,7 +175,6 @@ export default function StructurePage() {
       switch (node.level) {
         case "COUNTRY": return deleteCountry(node.id);
         case "ZONE": return deleteZone(node.id);
-        case "TEAM": return deleteTeam(node.id);
         case "LOCALITY": return deleteLocality(node.id);
         case "UNIT": return deleteUnit(node.id);
       }
@@ -211,7 +223,7 @@ export default function StructurePage() {
         node={responsablesNode}
         ministryId={ministryId}
         users={users}
-        org={structureQ.data ? { countries: structureQ.data.countries, zones: structureQ.data.zones, teams: structureQ.data.teams, units: structureQ.data.units } : undefined}
+        org={structureQ.data ? { countries: structureQ.data.countries, zones: structureQ.data.zones, localities: structureQ.data.localities, units: structureQ.data.units } : undefined}
         onClose={() => setResponsablesNode(null)}
       />
 
@@ -253,6 +265,12 @@ export default function StructurePage() {
                     {(continentsQ.data ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                   </Select>
                 </Field>
+                <Field label={t("structure.regionLabel")} hint={t("structure.regionLabelHint")}>
+                  <Select value={values.regionLabel} onChange={(e) => setValues({ ...values, regionLabel: e.target.value as RegionLabel })}>
+                    <option value="REGION">{t("structure.regionLabelRegion")}</option>
+                    <option value="STATE">{t("structure.regionLabelState")}</option>
+                  </Select>
+                </Field>
               </>
             )}
 
@@ -267,12 +285,6 @@ export default function StructurePage() {
               </>
             )}
 
-            {editing.level === "TEAM" && (
-              <Field label={t("structure.name")}>
-                <Input value={values.name} onChange={(e) => setValues({ ...values, name: e.target.value })} />
-              </Field>
-            )}
-
             {editing.level === "LOCALITY" && (
               <>
                 <Field label={t("structure.name")}>
@@ -285,17 +297,9 @@ export default function StructurePage() {
             )}
 
             {editing.level === "UNIT" && (
-              <>
-                <Field label={t("structure.name")}>
-                  <Input value={values.name} onChange={(e) => setValues({ ...values, name: e.target.value })} />
-                </Field>
-                <Field label={t("structure.unitType")}>
-                  <Select value={values.type} onChange={(e) => setValues({ ...values, type: e.target.value as "CENTER" | "ASSEMBLY" })}>
-                    <option value="CENTER">{t("structure.typeCenter")}</option>
-                    <option value="ASSEMBLY">{t("structure.typeAssembly")}</option>
-                  </Select>
-                </Field>
-              </>
+              <Field label={t("structure.name")}>
+                <Input value={values.name} onChange={(e) => setValues({ ...values, name: e.target.value })} />
+              </Field>
             )}
           </div>
         )}
@@ -353,10 +357,8 @@ function StructureRow({
           {t(`subscriptions.level.${node.level}`)}
         </span>
         <span style={{ fontWeight: isMinistry ? 600 : 500 }}>{node.name}</span>
-        {node.level === "UNIT" && node.data?.type && (
-          <Badge tone={node.data.type === "CENTER" ? "green" : "earth"}>
-            {node.data.type === "CENTER" ? t("structure.typeCenter") : t("structure.typeAssembly")}
-          </Badge>
+        {node.level === "LOCALITY" && node.children.length > 1 && (
+          <Badge tone="earth">{t("structure.assemblyCount", { count: node.children.length })}</Badge>
         )}
         <span style={{ flex: 1 }} />
         {canHaveResponsables(node.level) && (

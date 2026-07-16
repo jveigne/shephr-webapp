@@ -1,14 +1,13 @@
 import type { NodeLevel } from "./orgTree";
 import type { AdminUserResponse, ModuleRole } from "@/services/userService";
 
-// Rôle naturel par niveau (Lot 3.5 + Lot Team). LOCALITY n'est pas un niveau de rattachement.
-// Mapping cible : Team→DIRIGEANT (team leader), Unité→DIRIGEANT_UNITE/MEMBRE.
+// Rôle naturel par niveau (Chantier B, décision #7) : COORDINATEUR=Nation · SENIOR=Région/État ·
+// DIRIGEANT=Ville (ex-team leader) · DIRIGEANT_UNITE=Assemblée de maison.
 export const RESP_ROLES_BY_LEVEL: Record<NodeLevel, ModuleRole[]> = {
   MINISTRY: ["LEADER", "SECRETARIAT"],
   COUNTRY: ["DIRIGEANT_COORDINATEUR"],
   ZONE: ["DIRIGEANT_SENIOR"],
-  TEAM: ["DIRIGEANT"],
-  LOCALITY: [],
+  LOCALITY: ["DIRIGEANT"],
   UNIT: ["DIRIGEANT_UNITE", "MEMBRE"],
 };
 
@@ -22,8 +21,8 @@ export function isResponsableOf(u: AdminUserResponse, level: NodeLevel, nodeId: 
   switch (level) {
     case "UNIT":
       return u.goalUnitId === nodeId || has(u.goalUnitIds, nodeId) || u.donationUnitId === nodeId || has(u.donationUnitIds, nodeId);
-    case "TEAM":
-      return u.goalTeamId === nodeId || u.donationTeamId === nodeId;
+    case "LOCALITY":
+      return u.goalCityId === nodeId || u.donationCityId === nodeId;
     case "ZONE":
       return u.goalZoneId === nodeId || u.donationZoneId === nodeId;
     case "COUNTRY":
@@ -37,11 +36,11 @@ export function isResponsableOf(u: AdminUserResponse, level: NodeLevel, nodeId: 
 
 /** Rattachement Goals dérivé du nœud + rôle (les autres modules ne sont pas touchés). */
 export function buildGoalAttachment(level: NodeLevel, nodeId: string, role: ModuleRole) {
-  const base: { goalRole: ModuleRole; goalUnitId?: string; goalUnitIds?: string[]; goalTeamId?: string; goalZoneId?: string; goalCountryIds?: string[] } = { goalRole: role };
+  const base: { goalRole: ModuleRole; goalUnitId?: string; goalUnitIds?: string[]; goalCityId?: string; goalZoneId?: string; goalCountryIds?: string[] } = { goalRole: role };
   if (level === "UNIT") {
     base.goalUnitId = nodeId;
-  } else if (level === "TEAM") {
-    base.goalTeamId = nodeId;
+  } else if (level === "LOCALITY") {
+    base.goalCityId = nodeId;
   } else if (level === "ZONE") {
     base.goalZoneId = nodeId;
   } else if (level === "COUNTRY") {
