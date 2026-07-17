@@ -6,7 +6,7 @@ import { useToasts } from "@/context/ToastContext";
 import { listMinistries, type MinistryResponse } from "@/services/ministryService";
 import { fetchMinistryStructure } from "@/services/orgService";
 import {
-  deleteUser, listMinistryUsers, setUserPassword, updateUserInfo,
+  deleteUser, listMinistryUsers, reassignUser, setUserPassword, updateUserInfo,
   type AdminUserResponse, type ModuleRole,
 } from "@/services/userService";
 
@@ -30,6 +30,11 @@ export default function UtilisateursPage() {
   const [pwUser, setPwUser] = useState<AdminUserResponse | null>(null);
   const [pw, setPw] = useState("");
   const [delUser, setDelUser] = useState<AdminUserResponse | null>(null);
+  // Changement de rôle (reassign : rôle + rattachement posés en bloc côté backend).
+  const [roleUser, setRoleUser] = useState<AdminUserResponse | null>(null);
+  const [roleValue, setRoleValue] = useState<ModuleRole>("MEMBRE");
+  const [roleEntity, setRoleEntity] = useState("");
+  const [roleSupervisor, setRoleSupervisor] = useState("");
 
   const ministriesQ = useQuery({ queryKey: ["ministries"], queryFn: listMinistries });
   const usersQ = useQuery({
@@ -102,6 +107,55 @@ export default function UtilisateursPage() {
 
   const openEdit = (u: AdminUserResponse) => { setEditName(u.fullName); setEditEmail(u.email); setEditActive(u.active); setEditUser(u); };
 
+  // ---- Changement de rôle (mapping décision #7 : DIRIGEANT=Ville, SENIOR=Région, COORDINATEUR=Nation) ----
+  const entityKind = (r: ModuleRole): "unit" | "city" | "zone" | "country" | null =>
+    r === "MEMBRE" || r === "DIRIGEANT_UNITE" ? "unit"
+    : r === "DIRIGEANT" ? "city"
+    : r === "DIRIGEANT_SENIOR" ? "zone"
+    : r === "DIRIGEANT_COORDINATEUR" ? "country"
+    : null;
+
+  const currentEntityFor = (u: AdminUserResponse, r: ModuleRole): string => {
+    switch (entityKind(r)) {
+      case "unit": return u.goalUnitId ?? "";
+      case "city": return u.goalCityId ?? "";
+      case "zone": return u.goalZoneId ?? "";
+      case "country": return u.goalCountryIds?.[0] ?? "";
+      default: return "";
+    }
+  };
+
+  const openRole = (u: AdminUserResponse) => {
+    const r = u.goalRole ?? "MEMBRE";
+    setRoleValue(r);
+    setRoleEntity(currentEntityFor(u, r));
+    setRoleSupervisor(u.supervisorId ?? "");
+    setRoleUser(u);
+  };
+
+  const roleM = useMutation({
+    mutationFn: () => reassignUser(roleUser!.id, {
+      goalRole: roleValue,
+      entityId: entityKind(roleValue) ? roleEntity : null,
+      supervisorId: roleSupervisor || null,
+    }),
+    onSuccess: () => { invalidate(); setRoleUser(null); push({ kind: "ok", title: t("users.roleSavedToast"), msg: "" }); },
+    onError: (e: unknown) => push({ kind: "error", title: t("common.failure"), msg: e instanceof Error ? e.message : t("common.error") }),
+  });
+
+  const roleEntityOptions =
+    entityKind(roleValue) === "unit" ? (org?.units ?? [])
+    : entityKind(roleValue) === "city" ? (org?.localities ?? [])
+    : entityKind(roleValue) === "zone" ? (org?.zones ?? [])
+    : entityKind(roleValue) === "country" ? (org?.countries ?? [])
+    : [];
+  const roleEntityLabel =
+    entityKind(roleValue) === "unit" ? t("subscriptions.level.UNIT")
+    : entityKind(roleValue) === "city" ? t("subscriptions.level.LOCALITY")
+    : entityKind(roleValue) === "zone" ? t("subscriptions.level.ZONE")
+    : t("subscriptions.level.COUNTRY");
+  const roleValid = entityKind(roleValue) == null || roleEntity !== "";
+
   const cols = [
     { label: t("users.colName"), render: (u: AdminUserResponse) => <span style={{ fontWeight: 500 }}>{u.fullName}</span> },
     { label: t("users.colEmail"), render: (u: AdminUserResponse) => <span style={{ color: "var(--ink-600)" }}>{u.email}</span> },
@@ -114,6 +168,7 @@ export default function UtilisateursPage() {
       render: (u: AdminUserResponse) => (
         <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
           <Button variant="ghost" size="sm" onClick={() => openEdit(u)}>{t("common.update")}</Button>
+          <Button variant="ghost" size="sm" onClick={() => openRole(u)}>{t("users.roleAction")}</Button>
           <Button variant="ghost" size="sm" onClick={() => { setPw(""); setPwUser(u); }}>{t("users.password")}</Button>
           <Button variant="danger" size="sm" onClick={() => setDelUser(u)}>{t("users.delete")}</Button>
         </div>
@@ -179,6 +234,42 @@ export default function UtilisateursPage() {
           <Field label={t("users.colName")}><Input value={editName} onChange={(e) => setEditName(e.target.value)} /></Field>
           <Field label={t("users.colEmail")}><Input value={editEmail} onChange={(e) => setEditEmail(e.target.value)} /></Field>
           <Field label={t("users.colStatus")}><Toggle checked={editActive} onChange={setEditActive} label={editActive ? t("users.active") : t("users.inactive")} /></Field>
+        </div>
+      </Modal>
+
+      {/* Changement de rôle */}
+      <Modal open={!!roleUser} onClose={() => setRoleUser(null)} title={t("users.roleTitle")} sub={roleUser ? `${roleUser.fullName} · ${roleUser.email}` : undefined}
+        footer={<><Button variant="ghost" onClick={() => setRoleUser(null)}>{t("common.cancel")}</Button>
+          <Button variant="primary" disabled={!roleValid || roleM.isPending} onClick={() => roleM.mutate()}>{roleM.isPending ? t("common.loading") : t("common.save")}</Button></>}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <Field label={t("users.colRole")}>
+            <Select value={roleValue} onChange={(e) => {
+              const r = e.target.value as ModuleRole;
+              setRoleValue(r);
+              setRoleEntity(roleUser ? currentEntityFor(roleUser, r) : "");
+            }}>
+              {ROLES.map((r) => <option key={r} value={r}>{t(`responsables.role.${r}`)}</option>)}
+            </Select>
+          </Field>
+          {entityKind(roleValue) != null ? (
+            <Field label={roleEntityLabel}>
+              <Select value={roleEntity} onChange={(e) => setRoleEntity(e.target.value)}>
+                <option value="">{t("common.choose")}</option>
+                {roleEntityOptions.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+              </Select>
+            </Field>
+          ) : (
+            <p style={{ margin: 0, fontSize: 13, color: "var(--ink-500)" }}>{t("users.roleMinistryWideHint")}</p>
+          )}
+          <Field label={t("users.colSupervisor")}>
+            <Select value={roleSupervisor} onChange={(e) => setRoleSupervisor(e.target.value)}>
+              <option value="">{t("responsables.root")}</option>
+              {(usersQ.data ?? []).filter((u) => u.id !== roleUser?.id).map((u) => (
+                <option key={u.id} value={u.id}>{u.fullName}</option>
+              ))}
+            </Select>
+          </Field>
+          <p style={{ margin: 0, fontSize: 12.5, color: "var(--ink-400)" }}>{t("users.roleHint")}</p>
         </div>
       </Modal>
 

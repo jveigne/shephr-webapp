@@ -21,7 +21,8 @@
     "superAdmin": "Super Admin",
     "errorUnknown": "Erreur inconnue",
     "error": "Erreur",
-    "failure": "Échec"
+    "failure": "Échec",
+    "choose": "— Choisir —"
   },
   "nav": {
     "clients": "Clients",
@@ -390,6 +391,11 @@
     "savedToast": "Utilisateur modifié",
     "pwToast": "Mot de passe défini",
     "deletedToast": "Utilisateur supprimé",
-    "deleteFailToast": "Suppression impossible"
+    "deleteFailToast": "Suppression impossible",
+    "roleAction": "Rôle",
+    "roleTitle": "Modifier le rôle",
+    "roleSavedToast": "Rôle mis à jour",
+    "roleMinistryWideHint": "Rôle ministère-large : aucun rattachement géographique (vue globale).",
+    "roleHint": "Le rattachement est reposé en bloc selon le rôle (Assemblée, Ville, Région ou Nation) — l'ancien rattachement est remplacé. Le superviseur détermine l'organigramme."
   }
 }

@@ -21,7 +21,8 @@
     "superAdmin": "Super Admin",
     "errorUnknown": "Unknown error",
     "error": "Error",
-    "failure": "Failed"
+    "failure": "Failed",
+    "choose": "— Choose —"
   },
   "nav": {
     "clients": "Clients",
@@ -390,6 +391,11 @@
     "savedToast": "User updated",
     "pwToast": "Password set",
     "deletedToast": "User deleted",
-    "deleteFailToast": "Deletion failed"
+    "deleteFailToast": "Deletion failed",
+    "roleAction": "Role",
+    "roleTitle": "Edit role",
+    "roleSavedToast": "Role updated",
+    "roleMinistryWideHint": "Ministry-wide role: no geographic attachment (global view).",
+    "roleHint": "The attachment is reset as a block according to the role (Assembly, City, Region or Nation) — the previous attachment is replaced. The supervisor defines the org chart."
   }
 }
