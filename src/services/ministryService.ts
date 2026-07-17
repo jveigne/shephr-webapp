@@ -1,4 +1,4 @@
-import { apiFetch } from "./api";
+import { API_URL, apiFetch } from "./api";
 
 // Mirrors com.excellence.back.org.admin.ministry.dto.MinistryResponse
 export interface MinistryResponse {
@@ -45,8 +45,7 @@ export function bootstrapMinistry(
   });
 }
 
-/** URL de la page d'acceptation d'invitation (Web Espace ministère, app distincte). */
+/** URL de la page d'acceptation d'invitation (Espace ministère, servi à la même URL que l'API). */
 export function invitationLink(token: string): string {
-  const base = import.meta.env.VITE_MINISTRY_WEB_URL || "http://localhost:5173";
-  return `${base.replace(/\/$/, "")}/invitation/${token}`;
+  return `${API_URL.replace(/\/$/, "")}/invitation/${token}`;
 }

@@ -24,6 +24,7 @@ export interface StructureOrg {
 
 type FormState =
   | { mode: "add" }
+  | { mode: "assign" }
   | { mode: "edit"; user: AdminUserResponse }
   | null;
 
@@ -45,6 +46,8 @@ export function ResponsablesDrawer({
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<ModuleRole | "">("");
   const [supervisorId, setSupervisorId] = useState("");
+  // Affectation d'un utilisateur déjà existant (mode "assign").
+  const [assignUserId, setAssignUserId] = useState("");
   // Édition = réaffectation : niveau + entité cibles.
   const [editLevel, setEditLevel] = useState<NodeLevel>("ZONE");
   const [editEntity, setEditEntity] = useState("");
@@ -67,12 +70,27 @@ export function ResponsablesDrawer({
     return [];
   }, [editLevel, org]);
 
+  // Candidats à l'affectation : tout utilisateur qui n'est pas déjà responsable de ce nœud.
+  const assignCandidates = useMemo(
+    () => (node ? users.filter((u) => !isResponsableOf(u, node.level, node.id)) : []),
+    [users, node],
+  );
+
   const invalidate = () => qc.invalidateQueries({ queryKey: ["ministry-users", ministryId] });
-  const closeForm = () => { setForm(null); setFullName(""); setEmail(""); setRole(""); setSupervisorId(""); setEditEntity(""); };
+  const closeForm = () => { setForm(null); setFullName(""); setEmail(""); setRole(""); setSupervisorId(""); setEditEntity(""); setAssignUserId(""); };
 
   const openAdd = () => {
     setFullName(""); setEmail(""); setRole(addRoleOptions[0] ?? ""); setSupervisorId("");
     setForm({ mode: "add" });
+  };
+  const openAssign = () => {
+    setAssignUserId(""); setRole(addRoleOptions[0] ?? ""); setSupervisorId("");
+    setForm({ mode: "assign" });
+  };
+  // À la sélection de l'utilisateur, on préremplit son superviseur actuel.
+  const pickAssignUser = (id: string) => {
+    setAssignUserId(id);
+    setSupervisorId(users.find((u) => u.id === id)?.supervisorId ?? "");
   };
   const openEdit = (u: AdminUserResponse) => {
     if (!node) return;
@@ -100,6 +118,14 @@ export function ResponsablesDrawer({
           supervisorId: supervisorId || null, ...buildGoalAttachment(node.level, node.id, role),
         });
       }
+      if (form.mode === "assign") {
+        if (!node || !assignUserId) return;
+        return reassignUser(assignUserId, {
+          goalRole: role,
+          entityId: node.level === "MINISTRY" ? null : node.id,
+          supervisorId: supervisorId || null,
+        });
+      }
       return reassignUser(form.user.id, {
         goalRole: role,
         entityId: editLevel === "MINISTRY" ? null : (editEntity || null),
@@ -125,8 +151,9 @@ export function ResponsablesDrawer({
     onError: (e: unknown) => push({ kind: "error", title: t("common.failure"), msg: e instanceof Error ? e.message : t("common.error") }),
   });
 
-  const valid = form?.mode === "add"
-    ? (!!role && fullName.trim() !== "" && /.+@.+\..+/.test(email))
+  const valid =
+    form?.mode === "add" ? (!!role && fullName.trim() !== "" && /.+@.+\..+/.test(email))
+    : form?.mode === "assign" ? (!!role && !!assignUserId)
     : (!!role && (editLevel === "MINISTRY" || !!editEntity));
 
   return (
@@ -139,9 +166,14 @@ export function ResponsablesDrawer({
       >
         {node && (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <Button variant="primary" iconL={<Icons.Plus size={15} />} onClick={openAdd}>
-              {t("responsables.add")}
-            </Button>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <Button variant="primary" iconL={<Icons.Plus size={15} />} onClick={openAdd}>
+                {t("responsables.add")}
+              </Button>
+              <Button variant="secondary" iconL={<Icons.User size={15} />} onClick={openAssign}>
+                {t("responsables.assignExisting")}
+              </Button>
+            </div>
 
             {responsables.length === 0 ? (
               <p style={{ color: "var(--ink-500)", margin: 0 }}>{t("responsables.empty")}</p>
@@ -184,7 +216,11 @@ export function ResponsablesDrawer({
       <Modal
         open={!!form}
         onClose={closeForm}
-        title={form?.mode === "add" ? t("responsables.addTitle") : t("responsables.reassignTitle")}
+        title={
+          form?.mode === "add" ? t("responsables.addTitle")
+          : form?.mode === "assign" ? t("responsables.assignTitle")
+          : t("responsables.reassignTitle")
+        }
         sub={form?.mode === "edit" ? fullName : (node ? `${t(`subscriptions.level.${node.level}`)} · ${node.name}` : undefined)}
         footer={
           <>
@@ -209,6 +245,25 @@ export function ResponsablesDrawer({
               </Select>
             </Field>
             <SupervisorSelect users={users} value={supervisorId} onChange={setSupervisorId} t={t} />
+          </div>
+        )}
+
+        {form?.mode === "assign" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <p style={{ margin: 0, color: "var(--ink-500)", fontSize: 13 }}>{t("responsables.assignHint")}</p>
+            <UserCombobox
+              users={assignCandidates}
+              value={assignUserId}
+              onChange={pickAssignUser}
+              t={t}
+              label={t("responsables.assignUserLabel")}
+            />
+            <Field label={t("responsables.roleLabel")}>
+              <Select value={role} onChange={(e) => setRole(e.target.value as ModuleRole)}>
+                {addRoleOptions.map((r) => <option key={r} value={r}>{t(`responsables.role.${r}`)}</option>)}
+              </Select>
+            </Field>
+            <SupervisorSelect users={users} value={supervisorId} onChange={setSupervisorId} t={t} excludeId={assignUserId || undefined} />
           </div>
         )}
 
@@ -243,16 +298,20 @@ export function ResponsablesDrawer({
 
 // Combobox avec recherche (nom / email) : indispensable dès que le ministère dépasse
 // quelques dizaines d'utilisateurs — un <select> natif de 1000 entrées est inutilisable.
-const SUPERVISOR_MAX_RESULTS = 50;
+const COMBOBOX_MAX_RESULTS = 50;
 
-function SupervisorSelect({
-  users, value, onChange, t, excludeId,
+function UserCombobox({
+  users, value, onChange, t, excludeId, label, hint, emptyOptionLabel,
 }: {
   users: AdminUserResponse[];
   value: string;
   onChange: (v: string) => void;
   t: (k: string, opts?: Record<string, unknown>) => string;
   excludeId?: string;
+  label: string;
+  hint?: string;
+  /** Libellé de l'option « aucun » (ex. racine pour le superviseur) ; absent = choix obligatoire. */
+  emptyOptionLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -263,7 +322,7 @@ function SupervisorSelect({
   const matches = q
     ? candidates.filter((u) => u.fullName.toLowerCase().includes(q) || u.email.toLowerCase().includes(q))
     : candidates;
-  const shown = matches.slice(0, SUPERVISOR_MAX_RESULTS);
+  const shown = matches.slice(0, COMBOBOX_MAX_RESULTS);
 
   const pick = (id: string) => { onChange(id); setQuery(""); setOpen(false); };
 
@@ -273,11 +332,11 @@ function SupervisorSelect({
   });
 
   return (
-    <Field label={t("responsables.supervisor")} hint={t("responsables.supervisorHint")}>
+    <Field label={label} hint={hint}>
       <div style={{ position: "relative" }}>
         <Input
           value={open ? query : (selected ? `${selected.fullName} — ${selected.email}` : "")}
-          placeholder={open ? t("responsables.supervisorSearchPlaceholder") : t("responsables.root")}
+          placeholder={open || !emptyOptionLabel ? t("responsables.supervisorSearchPlaceholder") : emptyOptionLabel}
           onFocus={() => { setQuery(""); setOpen(true); }}
           onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
           onBlur={() => { setQuery(""); setOpen(false); }}
@@ -291,9 +350,11 @@ function SupervisorSelect({
               boxShadow: "0 8px 24px rgba(0,0,0,.12)", maxHeight: 240, overflowY: "auto",
             }}
           >
-            <div style={{ ...rowStyle(value === ""), color: "var(--ink-500)" }} onClick={() => pick("")}>
-              {t("responsables.root")}
-            </div>
+            {emptyOptionLabel && (
+              <div style={{ ...rowStyle(value === ""), color: "var(--ink-500)" }} onClick={() => pick("")}>
+                {emptyOptionLabel}
+              </div>
+            )}
             {shown.map((p) => (
               <div key={p.id} style={rowStyle(p.id === value)} onClick={() => pick(p.id)}>
                 <div style={{ fontWeight: 500 }}>{p.fullName}</div>
@@ -314,6 +375,25 @@ function SupervisorSelect({
         )}
       </div>
     </Field>
+  );
+}
+
+function SupervisorSelect({
+  users, value, onChange, t, excludeId,
+}: {
+  users: AdminUserResponse[];
+  value: string;
+  onChange: (v: string) => void;
+  t: (k: string, opts?: Record<string, unknown>) => string;
+  excludeId?: string;
+}) {
+  return (
+    <UserCombobox
+      users={users} value={value} onChange={onChange} t={t} excludeId={excludeId}
+      label={t("responsables.supervisor")}
+      hint={t("responsables.supervisorHint")}
+      emptyOptionLabel={t("responsables.root")}
+    />
   );
 }
 
