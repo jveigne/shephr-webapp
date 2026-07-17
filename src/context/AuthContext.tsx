@@ -1,12 +1,21 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 import { authLogin, fetchCurrentUser, ChurchUser } from "@/services/authService";
+import { LANG_STORAGE_KEY, mapBackendLang, setLanguage } from "@/i18n";
+
+/** If the user carries a backend language code and no explicit choice is stored, apply it. */
+function applyUserLanguage(u: ChurchUser | null) {
+  if (!u) return;
+  const code = (u as { language?: string | null }).language;
+  const mapped = mapBackendLang(code);
+  if (mapped && !localStorage.getItem(LANG_STORAGE_KEY)) setLanguage(mapped);
+}
 
 interface AuthState {
   user: ChurchUser | null;
   token: string | null;
   loading: boolean;
   isAuthenticated: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<ChurchUser | null>;
   logout: () => void;
 }
 
@@ -32,6 +41,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         .then((u) => {
           if (u) {
             setUser(u);
+            applyUserLanguage(u);
             localStorage.setItem(USER_KEY, JSON.stringify(u));
           }
         })
@@ -49,8 +59,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const me = await fetchCurrentUser(newToken);
     if (me) {
       setUser(me);
+      applyUserLanguage(me);
       localStorage.setItem(USER_KEY, JSON.stringify(me));
     }
+    return me;
   };
 
   const logout = () => {

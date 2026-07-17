@@ -1,5 +1,6 @@
 import { useState, FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { Icons } from "@/components/icons";
 import { Button, Field, Input, Checkbox } from "@/components/primitives";
 import { useAuth } from "@/context/AuthContext";
@@ -9,6 +10,7 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const { login } = useAuth();
   const { push } = useToasts();
+  const { t } = useTranslation();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
@@ -21,11 +23,15 @@ export default function LoginPage() {
     setError("");
     setLoading(true);
     try {
-      await login(email, password);
-      push({ kind: "ok", title: "Bienvenue", msg: "Vous êtes connecté à Shephr." });
-      navigate("/dashboard");
+      const me = await login(email, password);
+      if (!me?.superAdmin) {
+        setError(t("login.accessDenied"));
+        return;
+      }
+      push({ kind: "ok", title: t("login.welcomeToastTitle"), msg: t("login.welcomeToastMsg") });
+      navigate("/ministeres");
     } catch (err: any) {
-      setError(err.message || "Erreur lors de la connexion.");
+      setError(err.message || t("login.loginError"));
     } finally {
       setLoading(false);
     }
@@ -38,7 +44,7 @@ export default function LoginPage() {
         <div className="deco-2" />
         <div className="top">
           <div className="brand-mark">S</div>
-          <span className="word">Shephr</span>
+          <span className="word">{t("common.shephr")}</span>
         </div>
 
         <svg viewBox="0 0 360 220" width="360" height="220" style={{ position: "relative", zIndex: 1, marginTop: 30 }}>
@@ -61,29 +67,29 @@ export default function LoginPage() {
         </svg>
 
         <div className="quote">
-          « Donner avec joie, <span className="ital">recevoir avec gratitude.</span> »
-          <div className="quote-sub">Shephr accompagne votre ministère à travers la collecte, la lecture et le récit de la générosité.</div>
+          {t("login.quote")}<span className="ital">{t("login.quoteEmphasis")}</span>{t("login.quoteEnd")}
+          <div className="quote-sub">{t("login.quoteSub")}</div>
         </div>
       </div>
 
       <div className="login-main">
         <div className="login-card">
-          <h1>Bienvenue</h1>
-          <div className="sub">Connectez-vous à votre espace d'administration Shephr.</div>
+          <h1>{t("login.welcome")}</h1>
+          <div className="sub">{t("login.subtitle")}</div>
 
           <form className="form" onSubmit={submit}>
-            <Field label="Adresse email">
+            <Field label={t("login.emailLabel")}>
               <Input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 icon={<Icons.Mail size={15} />}
-                placeholder="votre@email.com"
+                placeholder={t("login.emailPlaceholder")}
                 required
               />
             </Field>
 
-            <Field label="Mot de passe">
+            <Field label={t("login.passwordLabel")}>
               <div className="input-wrap">
                 <span className="ico-left"><Icons.Lock size={15} /></span>
                 <input
@@ -111,9 +117,9 @@ export default function LoginPage() {
             <div className="row-between">
               <label style={{ display: "inline-flex", alignItems: "center", gap: 7, color: "var(--ink-700)", cursor: "pointer" }}>
                 <Checkbox checked={remember} onChange={setRemember} />
-                Se souvenir de moi
+                {t("login.rememberMe")}
               </label>
-              <a href="#">Mot de passe oublié ?</a>
+              <a href="#">{t("login.forgotPassword")}</a>
             </div>
 
             {error && (
@@ -124,13 +130,13 @@ export default function LoginPage() {
 
             <Button type="submit" variant="primary" disabled={loading}
               style={{ justifyContent: "center", marginTop: 6, padding: "12px 14px" }}>
-              {loading ? "Connexion…" : "Se connecter"}
+              {loading ? t("login.signingIn") : t("login.signIn")}
             </Button>
           </form>
 
           <div className="reserved">
             <Icons.Shield size={16} />
-            <span>Accès réservé aux administrateurs. Les membres et dirigeants utilisent l'application mobile Shephr.</span>
+            <span>{t("login.reserved")}</span>
           </div>
         </div>
       </div>
