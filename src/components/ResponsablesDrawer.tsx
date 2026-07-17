@@ -9,7 +9,7 @@ import { invitationLink } from "@/services/ministryService";
 import type { NodeLevel, TreeNode } from "@/lib/orgTree";
 import { RESP_ROLES_BY_LEVEL, buildGoalAttachment, isResponsableOf } from "@/lib/responsables";
 import {
-  deactivateUser, inviteUser, reassignUser,
+  deactivateUser, inviteUser, reassignUser, regenerateInvitation,
   type AdminUserResponse, type ModuleRole,
 } from "@/services/userService";
 
@@ -152,6 +152,15 @@ export function ResponsablesDrawer({
     onError: (e: unknown) => push({ kind: "error", title: t("common.failure"), msg: e instanceof Error ? e.message : t("common.error") }),
   });
 
+  const regenM = useMutation({
+    mutationFn: (id: string) => regenerateInvitation(id),
+    onSuccess: (res) => {
+      setInvites((prev) => ({ ...prev, [res.userId]: { code: res.invitationShortCode, token: res.invitationToken } }));
+      push({ kind: "ok", title: t("responsables.regeneratedToast"), msg: t("responsables.codeSaved") });
+    },
+    onError: (e: unknown) => push({ kind: "error", title: t("common.failure"), msg: e instanceof Error ? e.message : t("common.error") }),
+  });
+
   const valid =
     form?.mode === "add" ? (!!role && fullName.trim() !== "" && /.+@.+\..+/.test(email))
     : form?.mode === "assign" ? (!!role && !!assignUserId)
@@ -200,8 +209,13 @@ export function ResponsablesDrawer({
                           <CopyRow display={t("responsables.copyLink")} value={invitationLink(invites[u.id].token)} t={t} small />
                         </div>
                       )}
-                      <div style={{ display: "flex", gap: 8 }}>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                         <Button variant="secondary" size="sm" onClick={() => openEdit(u)}>{t("responsables.reassign")}</Button>
+                        {!u.active && (
+                          <Button variant="secondary" size="sm" disabled={regenM.isPending} onClick={() => regenM.mutate(u.id)}>
+                            {regenM.isPending ? t("common.loading") : t("responsables.regenerate")}
+                          </Button>
+                        )}
                         {u.active && <Button variant="danger" size="sm" disabled={deactivateM.isPending} onClick={() => deactivateM.mutate(u.id)}>{t("responsables.deactivate")}</Button>}
                       </div>
                     </div>
