@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Badge, Button, Field, Input, Modal, Select, Table, Toggle, TopBar } from "@/components/primitives";
+import { SupervisorSelect } from "@/components/UserCombobox";
 import { useToasts } from "@/context/ToastContext";
 import { listMinistries, type MinistryResponse } from "@/services/ministryService";
 import { fetchMinistryStructure } from "@/services/orgService";
@@ -18,6 +19,7 @@ export default function UtilisateursPage() {
   const qc = useQueryClient();
 
   const [ministryId, setMinistryId] = useState("");
+  const [fCountry, setFCountry] = useState("");
   const [fZone, setFZone] = useState("");
   const [fUnit, setFUnit] = useState("");
   const [fRole, setFRole] = useState("");
@@ -59,6 +61,19 @@ export default function UtilisateursPage() {
     const locZone = new Map((org?.localities ?? []).map((l) => [l.id, l.zoneId]));
     return new Map((org?.units ?? []).map((u) => [u.id, u.localityId ? locZone.get(u.localityId) ?? null : null]));
   }, [org]);
+  // Zone / localité / unité → pays, pour filtrer « tous les users du pays ».
+  const zoneCountry = useMemo(() => new Map((org?.zones ?? []).map((z) => [z.id, z.countryId])), [org]);
+  const locCountry = useMemo(
+    () => new Map((org?.localities ?? []).map((l) => [l.id, l.zoneId ? zoneCountry.get(l.zoneId) ?? null : null])),
+    [org, zoneCountry],
+  );
+  const unitCountry = useMemo(() => {
+    const locality = new Map((org?.localities ?? []).map((l) => [l.id, l]));
+    return new Map((org?.units ?? []).map((u) => {
+      const loc = u.localityId ? locality.get(u.localityId) : undefined;
+      return [u.id, loc?.zoneId ? zoneCountry.get(loc.zoneId) ?? null : null];
+    }));
+  }, [org, zoneCountry]);
 
   const attachmentLabel = (u: AdminUserResponse): string => {
     if (u.goalZoneId) return `${t("subscriptions.level.ZONE")} · ${zoneName.get(u.goalZoneId) ?? "—"}`;
@@ -74,8 +89,21 @@ export default function UtilisateursPage() {
     (u.goalUnitId && unitZone.get(u.goalUnitId) === zoneId) ||
     (u.donationUnitId && unitZone.get(u.donationUnitId) === zoneId);
 
+  const usersInCountry = (u: AdminUserResponse, countryId: string) =>
+    u.goalCountryIds?.includes(countryId) || u.donationCountryIds?.includes(countryId) ||
+    u.coordinatedCountryIds?.includes(countryId) ||
+    (u.goalZoneId && zoneCountry.get(u.goalZoneId) === countryId) ||
+    (u.donationZoneId && zoneCountry.get(u.donationZoneId) === countryId) ||
+    (u.goalCityId && locCountry.get(u.goalCityId) === countryId) ||
+    (u.donationCityId && locCountry.get(u.donationCityId) === countryId) ||
+    (u.goalUnitId && unitCountry.get(u.goalUnitId) === countryId) ||
+    (u.donationUnitId && unitCountry.get(u.donationUnitId) === countryId) ||
+    u.goalUnitIds?.some((id) => unitCountry.get(id) === countryId) ||
+    u.donationUnitIds?.some((id) => unitCountry.get(id) === countryId);
+
   const rows = useMemo(() => {
     let list = usersQ.data ?? [];
+    if (fCountry) list = list.filter((u) => usersInCountry(u, fCountry));
     if (fZone) list = list.filter((u) => usersInZone(u, fZone));
     if (fUnit) list = list.filter((u) => u.goalUnitId === fUnit || u.donationUnitId === fUnit || u.goalUnitIds?.includes(fUnit) || u.donationUnitIds?.includes(fUnit));
     if (fRole) list = list.filter((u) => u.goalRole === fRole || u.donationRole === fRole);
@@ -85,7 +113,7 @@ export default function UtilisateursPage() {
     }
     return list.map((u) => ({ ...u, _key: u.id }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [usersQ.data, fZone, fUnit, fRole, search, unitZone]);
+  }, [usersQ.data, fCountry, fZone, fUnit, fRole, search, unitZone, zoneCountry, locCountry, unitCountry]);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ["ministry-users", ministryId] });
 
@@ -183,7 +211,7 @@ export default function UtilisateursPage() {
         <div className="card" style={{ padding: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderBottom: "1px solid var(--line,#eee)", flexWrap: "wrap" }}>
             <span style={{ fontWeight: 600 }}>{t("users.workspaceTitle")}</span>
-            <Select value={ministryId} onChange={(e) => { setMinistryId(e.target.value); setFZone(""); setFUnit(""); setFRole(""); setSearch(""); }}>
+            <Select value={ministryId} onChange={(e) => { setMinistryId(e.target.value); setFCountry(""); setFZone(""); setFUnit(""); setFRole(""); setSearch(""); }}>
               <option value="">{t("users.pickMinistry")}</option>
               {(ministriesQ.data ?? []).map((m: MinistryResponse) => <option key={m.id} value={m.id}>{m.name}</option>)}
             </Select>
@@ -194,10 +222,18 @@ export default function UtilisateursPage() {
           ) : (
             <>
               <div style={{ display: "flex", gap: 12, padding: "12px 16px", flexWrap: "wrap", borderBottom: "1px solid var(--line,#eee)" }}>
+                <Field label={t("subscriptions.level.COUNTRY")}>
+                  <Select value={fCountry} onChange={(e) => { setFCountry(e.target.value); setFZone(""); setFUnit(""); }}>
+                    <option value="">{t("users.all")}</option>
+                    {(org?.countries ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </Select>
+                </Field>
                 <Field label={t("subscriptions.level.ZONE")}>
                   <Select value={fZone} onChange={(e) => setFZone(e.target.value)}>
                     <option value="">{t("users.allFem")}</option>
-                    {(org?.zones ?? []).map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
+                    {(org?.zones ?? [])
+                      .filter((z) => !fCountry || z.countryId === fCountry)
+                      .map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
                   </Select>
                 </Field>
                 <Field label={t("subscriptions.level.UNIT")}>
@@ -261,14 +297,7 @@ export default function UtilisateursPage() {
           ) : (
             <p style={{ margin: 0, fontSize: 13, color: "var(--ink-500)" }}>{t("users.roleMinistryWideHint")}</p>
           )}
-          <Field label={t("users.colSupervisor")}>
-            <Select value={roleSupervisor} onChange={(e) => setRoleSupervisor(e.target.value)}>
-              <option value="">{t("responsables.root")}</option>
-              {(usersQ.data ?? []).filter((u) => u.id !== roleUser?.id).map((u) => (
-                <option key={u.id} value={u.id}>{u.fullName}</option>
-              ))}
-            </Select>
-          </Field>
+          <SupervisorSelect users={usersQ.data ?? []} value={roleSupervisor} onChange={setRoleSupervisor} t={t} excludeId={roleUser?.id} />
           <p style={{ margin: 0, fontSize: 12.5, color: "var(--ink-400)" }}>{t("users.roleHint")}</p>
         </div>
       </Modal>
