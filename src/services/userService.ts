@@ -113,6 +113,11 @@ export function updateUserInfo(id: string, body: UpdateUserRequest): Promise<Adm
   });
 }
 
+/** Régénère le code/lien d'invitation d'un compte non activé (l'ancien est invalidé). */
+export function regenerateInvitation(id: string): Promise<InviteUserResponse> {
+  return apiFetch<InviteUserResponse>(`/api/church/admin/users/${id}/regenerate-invitation`, { method: "POST" });
+}
+
 /** Définit un nouveau mot de passe. */
 export function setUserPassword(id: string, password: string): Promise<AdminUserResponse> {
   return apiFetch<AdminUserResponse>(`/api/church/admin/users/${id}/set-password`, {
