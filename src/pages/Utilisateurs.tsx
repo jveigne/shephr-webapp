@@ -143,7 +143,7 @@ export default function UtilisateursPage() {
     onError: (e: unknown) => push({ kind: "error", title: t("common.failure"), msg: e instanceof Error ? e.message : t("common.error") }),
   });
 
-  const roleEntityOptions =
+  const roleEntityOptions: Array<{ id: string; name: string }> =
     entityKind(roleValue) === "unit" ? (org?.units ?? [])
     : entityKind(roleValue) === "city" ? (org?.localities ?? [])
     : entityKind(roleValue) === "zone" ? (org?.zones ?? [])
