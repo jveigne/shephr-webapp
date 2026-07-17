@@ -1,19 +1,18 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import { AuthProvider } from "@/context/AuthContext";
 import { ToastProvider } from "@/context/ToastContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { AppShell } from "@/components/AppShell";
+import { Placeholder } from "@/components/Placeholder";
 
 import LoginPage from "@/pages/Login";
-import DashboardPage from "@/pages/Dashboard";
-import DonationsPage from "@/pages/Donations";
 import MinisteresPage from "@/pages/Ministeres";
-import LocalitesPage from "@/pages/Localites";
-import UnitesPage from "@/pages/Unites";
-import UsersPage from "@/pages/Users";
-import HierarchyPage from "@/pages/Hierarchy";
-import ExportsPage from "@/pages/Exports";
+import StructurePage from "@/pages/Structure";
+import UtilisateursPage from "@/pages/Utilisateurs";
+import AbonnementsPage from "@/pages/Abonnements";
+import AuditPage from "@/pages/Audit";
 import SettingsPage from "@/pages/Settings";
 
 const queryClient = new QueryClient();
@@ -26,6 +25,18 @@ function Shielded({ children }: { children: JSX.Element }) {
   );
 }
 
+function GlobalGoalsPlaceholder() {
+  const { t } = useTranslation();
+  return (
+    <Placeholder
+      title={t("nav.globalGoals")}
+      crumbs={[t("common.jexcellence"), t("nav.globalGoals")]}
+      description={t("placeholder.globalGoalsDescription")}
+      endpointHint={t("placeholder.globalGoalsHint")}
+    />
+  );
+}
+
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -33,20 +44,26 @@ export default function App() {
         <AuthProvider>
           <BrowserRouter>
             <Routes>
-              <Route path="/" element={<Navigate to="/dashboard" replace />} />
+              <Route path="/" element={<Navigate to="/ministeres" replace />} />
               <Route path="/login" element={<LoginPage />} />
 
-              <Route path="/dashboard"  element={<Shielded><DashboardPage  /></Shielded>} />
-              <Route path="/donations"  element={<Shielded><DonationsPage  /></Shielded>} />
+              {/* Back-office JExcellence — cross-tenant, SUPER_ADMIN only */}
               <Route path="/ministeres" element={<Shielded><MinisteresPage /></Shielded>} />
-              <Route path="/localites"  element={<Shielded><LocalitesPage  /></Shielded>} />
-              <Route path="/unites"     element={<Shielded><UnitesPage     /></Shielded>} />
-              <Route path="/users"      element={<Shielded><UsersPage      /></Shielded>} />
-              <Route path="/hierarchy"  element={<Shielded><HierarchyPage  /></Shielded>} />
-              <Route path="/exports"    element={<Shielded><ExportsPage    /></Shielded>} />
-              <Route path="/settings"   element={<Shielded><SettingsPage   /></Shielded>} />
+              <Route path="/structure" element={<Shielded><StructurePage /></Shielded>} />
+              <Route path="/utilisateurs" element={<Shielded><UtilisateursPage /></Shielded>} />
+              <Route path="/abonnements" element={<Shielded><AbonnementsPage /></Shielded>} />
+              <Route
+                path="/goals"
+                element={
+                  <Shielded>
+                    <GlobalGoalsPlaceholder />
+                  </Shielded>
+                }
+              />
+              <Route path="/audit" element={<Shielded><AuditPage /></Shielded>} />
+              <Route path="/settings" element={<Shielded><SettingsPage /></Shielded>} />
 
-              <Route path="*" element={<Navigate to="/dashboard" replace />} />
+              <Route path="*" element={<Navigate to="/ministeres" replace />} />
             </Routes>
           </BrowserRouter>
         </AuthProvider>

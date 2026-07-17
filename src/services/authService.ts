@@ -1,13 +1,26 @@
 import { API_URL } from "./api";
 
+// Aligné sur com.excellence.back.auth.ModuleRole (correction T1 : DIRIGEANT_LEADER n'existe plus).
+export type ModuleRole =
+  | "MEMBRE"
+  | "DIRIGEANT_UNITE"
+  | "DIRIGEANT"
+  | "DIRIGEANT_SENIOR"
+  | "DIRIGEANT_COORDINATEUR"
+  | "LEADER"
+  | "SECRETARIAT";
+
+// Mirrors com.excellence.back.donation.auth.dto.MeResponse
 export type ChurchUser = {
   id: string;
   email: string;
   fullName: string;
-  role: "USER" | "MEMBER" | "LEADER" | "ADMIN" | "SUPER_ADMIN";
-  leaderLevel?: "JUNIOR" | "SENIOR" | null;
+  superAdmin: boolean;
+  donationRole?: ModuleRole | null;
+  goalRole?: ModuleRole | null;
   ministryId?: string | null;
-  unitId?: string | null;
+  donationUnitId?: string | null;
+  donationZoneId?: string | null;
   active: boolean;
 };
 

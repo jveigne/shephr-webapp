@@ -1,4 +1,5 @@
 import React, { useEffect } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { Icons } from "./icons";
 
 // ---------- Button ----------
@@ -202,12 +203,24 @@ export function Table<R = any>({
   columns: Column<R>[]; rows: (R & { _key?: any })[]; onRowClick?: (r: R) => void;
   zebra?: boolean; empty?: React.ReactNode;
 }) {
+  return (
+    <TableInner columns={columns} rows={rows} onRowClick={onRowClick} zebra={zebra} empty={empty} />
+  );
+}
+
+function TableInner<R = any>({
+  columns, rows, onRowClick, zebra, empty,
+}: {
+  columns: Column<R>[]; rows: (R & { _key?: any })[]; onRowClick?: (r: R) => void;
+  zebra?: boolean; empty?: React.ReactNode;
+}) {
+  const { t } = useTranslation();
   if (!rows || rows.length === 0) {
     return (empty as any) || (
       <div className="empty">
         <div className="icon-wrap"><Icons.Inbox size={26} /></div>
-        <h4>Aucun résultat</h4>
-        <p>Essayez d'ajuster vos filtres.</p>
+        <h4>{t("table.noResults")}</h4>
+        <p>{t("table.adjustFilters")}</p>
       </div>
     );
   }
@@ -243,6 +256,7 @@ export function Table<R = any>({
 export function Pagination({
   page, pageCount, total, perPage, onPage,
 }: { page: number; pageCount: number; total: number; perPage: number; onPage: (p: number) => void }) {
+  const { t } = useTranslation();
   const from = (page - 1) * perPage + 1;
   const to = Math.min(page * perPage, total);
   const windowSize = 5;
@@ -253,7 +267,13 @@ export function Pagination({
   for (let i = start; i <= end; i++) pages.push(i);
   return (
     <div className="pagination">
-      <div>Affichage <strong>{from}</strong>–<strong>{to}</strong> sur <strong>{total}</strong></div>
+      <div>
+        <Trans
+          i18nKey="pagination.showing"
+          values={{ from, to, total }}
+          components={[<strong />, <strong />, <strong />]}
+        />
+      </div>
       <div className="pages">
         <button className="pg-btn" disabled={page === 1} onClick={() => onPage(page - 1)}><Icons.ChevLeft size={12} /></button>
         {start > 1 && <button className="pg-btn" onClick={() => onPage(1)}>1</button>}
