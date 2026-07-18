@@ -121,9 +121,20 @@ export function ResponsablesDrawer({
       }
       if (form.mode === "assign") {
         if (!node || !assignUserId) return;
+        // Multi-rattachements : si la personne a DÉJÀ ce rôle au même niveau (DIRIGEANT/ville,
+        // SENIOR/région), le nœud s'AJOUTE à ses rattachements ; sinon remplacement en bloc.
+        const target = users.find((u) => u.id === assignUserId);
+        const existing =
+          node.level === "LOCALITY" && role === "DIRIGEANT" && target?.goalRole === "DIRIGEANT"
+            ? (target.goalCityIds?.length ? target.goalCityIds : (target.goalCityId ? [target.goalCityId] : []))
+          : node.level === "ZONE" && role === "DIRIGEANT_SENIOR" && target?.goalRole === "DIRIGEANT_SENIOR"
+            ? (target.goalZoneIds?.length ? target.goalZoneIds : (target.goalZoneId ? [target.goalZoneId] : []))
+          : [];
+        const entityIds = node.level === "MINISTRY" ? [] : [...existing.filter((id) => id !== node.id), node.id];
         return reassignUser(assignUserId, {
           goalRole: role,
-          entityId: node.level === "MINISTRY" ? null : node.id,
+          entityId: node.level === "MINISTRY" ? null : entityIds[0],
+          entityIds: node.level === "MINISTRY" ? undefined : entityIds,
           supervisorId: supervisorId || null,
         });
       }
