@@ -22,9 +22,9 @@ export function isResponsableOf(u: AdminUserResponse, level: NodeLevel, nodeId: 
     case "UNIT":
       return u.goalUnitId === nodeId || has(u.goalUnitIds, nodeId) || u.donationUnitId === nodeId || has(u.donationUnitIds, nodeId);
     case "LOCALITY":
-      return u.goalCityId === nodeId || u.donationCityId === nodeId;
+      return u.goalCityId === nodeId || u.donationCityId === nodeId || has(u.goalCityIds, nodeId);
     case "ZONE":
-      return u.goalZoneId === nodeId || u.donationZoneId === nodeId;
+      return u.goalZoneId === nodeId || u.donationZoneId === nodeId || has(u.goalZoneIds, nodeId);
     case "COUNTRY":
       return has(u.goalCountryIds, nodeId) || has(u.donationCountryIds, nodeId) || has(u.coordinatedCountryIds, nodeId);
     case "MINISTRY":

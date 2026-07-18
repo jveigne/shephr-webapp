@@ -24,6 +24,9 @@ export interface AdminUserResponse {
   goalCityId: string | null;
   goalUnitIds: string[];
   goalCountryIds: string[];
+  /** Multi-rattachements (home + set) : villes d'un DIRIGEANT / régions d'un SENIOR. */
+  goalCityIds: string[];
+  goalZoneIds: string[];
   coordinatedCountryIds: string[];
   active: boolean;
   createdAt: string;
@@ -94,6 +97,8 @@ export function deactivateUser(id: string): Promise<AdminUserResponse> {
 export interface ReassignUserRequest {
   goalRole: ModuleRole;
   entityId?: string | null;
+  /** Multi-rattachements (villes d'un DIRIGEANT, régions d'un SENIOR) : la première est la principale. */
+  entityIds?: string[];
   supervisorId?: string | null;
 }
 
