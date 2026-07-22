@@ -36,7 +36,35 @@
     "settings": "Settings",
     "backOffice": "JExcellence · Back-office",
     "structure": "Structure",
+    "requests": "Requests",
     "users": "Users"
+  },
+  "requests": {
+    "title": "Structure requests",
+    "intro": "Creation requests (region, city, assembly) submitted from the apps — by any user, whatever their level. Approving creates the entity (and the “to create” parents of the chain); rejecting requires a reason shared with the requester and rejects dependent requests.",
+    "colDate": "Date",
+    "colType": "Type",
+    "colName": "Requested name",
+    "colParent": "Attachment",
+    "colRequester": "Requester",
+    "approve": "Approve",
+    "reject": "Reject",
+    "types": {
+      "REGION": "Region",
+      "CITY": "City",
+      "ASSEMBLY": "Assembly"
+    },
+    "empty": "No pending request",
+    "emptyHint": "Requests submitted from the mobile or web app will appear here.",
+    "approvedToast": "“{{name}}” created and request approved",
+    "rejectedToast": "Request “{{name}}” rejected",
+    "rejectTitle": "Reject “{{name}}”?",
+    "rejectSub": "The reason will be visible to the requester in their request history.",
+    "rejectReasonLabel": "Rejection reason",
+    "rejectReasonPlaceholder": "E.g.: duplicate of an existing structure…",
+    "rejectConfirm": "Reject the request",
+    "parentPendingBadge": "to create",
+    "approveChainHint": "Approving will also create the “to create” parents of the chain."
   },
   "login": {
     "quote": "“Give with joy, ",
