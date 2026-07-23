@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Icons } from "@/components/icons";
 import { Badge, Button, Field, IconButton, Input, Modal, Select, TopBar } from "@/components/primitives";
 import { useToasts } from "@/context/ToastContext";
-import { buildTree, type NodeLevel, type TreeNode } from "@/lib/orgTree";
+import { buildTree, byNameFr, type NodeLevel, type TreeNode } from "@/lib/orgTree";
 import { COUNTRIES_FR_SORTED } from "@/lib/countries";
 import { canHaveResponsables, isResponsableOf } from "@/lib/responsables";
 import { ResponsablesDrawer } from "@/components/ResponsablesDrawer";
@@ -74,6 +74,9 @@ export default function StructurePage() {
   }, [nationsQ.data]);
   const users: AdminUserResponse[] = usersQ.data ?? [];
 
+  const ministries = useMemo(() => [...(ministriesQ.data ?? [])].sort(byNameFr), [ministriesQ.data]);
+  const continents = useMemo(() => [...(continentsQ.data ?? [])].sort(byNameFr), [continentsQ.data]);
+
   const ministryName = useMemo(
     () => (ministriesQ.data ?? []).find((m) => m.id === ministryId)?.name ?? "—",
     [ministriesQ.data, ministryId],
@@ -109,7 +112,7 @@ export default function StructurePage() {
 
   const openAdd = (parent: TreeNode) => {
     const level = CHILD[parent.level]!;
-    setValues({ ...EMPTY_VALUES, continentId: continentsQ.data?.[0]?.id ?? "" });
+    setValues({ ...EMPTY_VALUES, continentId: continents[0]?.id ?? "" });
     setEditing({ mode: "add", level, parent });
   };
   const openEdit = (node: TreeNode) => {
@@ -203,7 +206,7 @@ export default function StructurePage() {
             <span style={{ fontWeight: 600 }}>{t("structure.workspaceTitle")}</span>
             <Select value={ministryId} onChange={(e) => setMinistryId(e.target.value)}>
               <option value="">{t("structure.pickMinistry")}</option>
-              {(ministriesQ.data ?? []).map((m: MinistryResponse) => <option key={m.id} value={m.id}>{m.name}</option>)}
+              {ministries.map((m: MinistryResponse) => <option key={m.id} value={m.id}>{m.name}</option>)}
             </Select>
           </div>
 
@@ -262,7 +265,7 @@ export default function StructurePage() {
                 <Field label={t("structure.continent")}>
                   <Select value={values.continentId} onChange={(e) => setValues({ ...values, continentId: e.target.value })}>
                     <option value="">{t("subscriptions.chooseOption")}</option>
-                    {(continentsQ.data ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    {continents.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                   </Select>
                 </Field>
                 <Field label={t("structure.regionLabel")} hint={t("structure.regionLabelHint")}>
