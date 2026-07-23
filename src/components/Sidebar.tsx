@@ -13,6 +13,7 @@ const NAV: NavSection[] = [
     items: [
       { id: "ministeres", labelKey: "nav.ministries", icon: "Building", path: "/ministeres" },
       { id: "structure", labelKey: "nav.structure", icon: "Hierarchy", path: "/structure" },
+      { id: "demandes", labelKey: "nav.requests", icon: "Inbox", path: "/demandes" },
       { id: "utilisateurs", labelKey: "nav.users", icon: "Users", path: "/utilisateurs" },
     ],
   },

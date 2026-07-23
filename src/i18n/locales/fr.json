@@ -36,7 +36,35 @@
     "settings": "Paramètres",
     "backOffice": "JExcellence · Back-office",
     "structure": "Structure",
+    "requests": "Demandes",
     "users": "Utilisateurs"
+  },
+  "requests": {
+    "title": "Demandes de structure",
+    "intro": "Demandes de création (région, ville, assemblée) déposées depuis les apps — par tout utilisateur, quel que soit son niveau. Approuver crée l'entité (et les parents « à créer » de la chaîne) ; refuser exige un motif transmis au demandeur et refuse les demandes dépendantes.",
+    "colDate": "Date",
+    "colType": "Type",
+    "colName": "Nom demandé",
+    "colParent": "Rattachement",
+    "colRequester": "Demandeur",
+    "approve": "Approuver",
+    "reject": "Refuser",
+    "types": {
+      "REGION": "Région",
+      "CITY": "Ville",
+      "ASSEMBLY": "Assemblée"
+    },
+    "empty": "Aucune demande en attente",
+    "emptyHint": "Les demandes déposées depuis le mobile ou le web apparaîtront ici.",
+    "approvedToast": "« {{name}} » créé et demande approuvée",
+    "rejectedToast": "Demande « {{name}} » refusée",
+    "rejectTitle": "Refuser « {{name}} » ?",
+    "rejectSub": "Le motif sera visible par le demandeur dans son suivi de demandes.",
+    "rejectReasonLabel": "Motif du refus",
+    "rejectReasonPlaceholder": "Ex. : doublon avec une structure existante…",
+    "rejectConfirm": "Refuser la demande",
+    "parentPendingBadge": "à créer",
+    "approveChainHint": "Approuver créera aussi les parents « à créer » de la chaîne."
   },
   "login": {
     "quote": "« Donner avec joie, ",
