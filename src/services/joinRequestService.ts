@@ -16,7 +16,6 @@ export interface JoinRequestResponse {
   assemblyName: string | null;
   cityName: string | null;
   /** true si l'assemblée visée a déjà un dirigeant titulaire. */
-  assemblyHasLeader: boolean;
   requestedRole: JoinRequestRole;
   status: JoinRequestStatus;
   /** Non null si la demande porte une assemblée à créer (chaînée à une demande de structure). */

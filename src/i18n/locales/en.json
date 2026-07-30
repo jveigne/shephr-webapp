@@ -76,8 +76,6 @@
     "colRole": "Requested role",
     "roleLeader": "Leader",
     "roleMember": "Member",
-    "leaderConflict": "This assembly already has an incumbent leader — approving will add a co-leader.",
-    "leaderConflictShort": "Leader already in place",
     "approve": "Attach",
     "reject": "Reject",
     "approveCreateHint": "Approving will first create the “to create” assembly, then attach the requester.",

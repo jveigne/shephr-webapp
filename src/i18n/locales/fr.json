@@ -76,8 +76,6 @@
     "colRole": "Rôle demandé",
     "roleLeader": "Dirigeant",
     "roleMember": "Fidèle",
-    "leaderConflict": "Cette assemblée a déjà un dirigeant titulaire — l'approbation ajoutera un co-dirigeant.",
-    "leaderConflictShort": "Dirigeant déjà en place",
     "approve": "Rattacher",
     "reject": "Refuser",
     "approveCreateHint": "Approuver créera d'abord l'assemblée « à créer », puis rattachera le demandeur.",

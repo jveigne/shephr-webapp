@@ -191,15 +191,6 @@ export default function DemandesPage() {
           <Badge tone={r.requestedRole === "LEADER" ? "earth" : "gray"}>
             {r.requestedRole === "LEADER" ? t("joinRequests.roleLeader") : t("joinRequests.roleMember")}
           </Badge>
-          {r.assemblyHasLeader && r.requestedRole === "LEADER" && (
-            <span
-              style={{ display: "inline-flex", alignItems: "center", gap: 4, marginLeft: 8, color: "var(--ink-600)", fontSize: 12 }}
-              title={t("joinRequests.leaderConflict")}
-            >
-              <Icons.Warning size={14} />
-              {t("joinRequests.leaderConflictShort")}
-            </span>
-          )}
         </span>
       ),
     },
@@ -212,13 +203,7 @@ export default function DemandesPage() {
             size="sm"
             iconL={<Icons.Check size={14} />}
             disabled={approveJoinM.isPending}
-            title={
-              r.assemblyHasLeader && r.requestedRole === "LEADER"
-                ? t("joinRequests.leaderConflict")
-                : r.structureRequestId
-                  ? t("joinRequests.approveCreateHint")
-                  : undefined
-            }
+            title={r.structureRequestId ? t("joinRequests.approveCreateHint") : undefined}
             onClick={() => approveJoinM.mutate(r.id)}
           >
             {t("joinRequests.approve")}
