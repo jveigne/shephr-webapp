@@ -22,7 +22,8 @@
     "errorUnknown": "Unknown error",
     "error": "Error",
     "failure": "Failed",
-    "choose": "— Choose —"
+    "choose": "— Choose —",
+    "saving": "Saving…"
   },
   "nav": {
     "clients": "Clients",
@@ -325,7 +326,16 @@
     "currencyEUR": "Euro",
     "currencyUSD": "US dollar",
     "currencyCHF": "Swiss franc",
-    "currencyCAD": "Canadian dollar"
+    "currencyCAD": "Canadian dollar",
+    "contactTitle": "Support contact details",
+    "contactDesc": "Shown in the mobile app, in the web space and on public pages (landing, account deletion). A change here is visible everywhere, with no redeploy.",
+    "contactEmailLabel": "Support email address",
+    "contactWhatsappLabel": "WhatsApp number",
+    "contactWhatsappHint": "International format without “+” or spaces (e.g. 33754596796).",
+    "contactWhatsappInvalid": "Invalid number: digits only, no “+” and no spaces.",
+    "contactSaved": "Contact details updated",
+    "contactSaveFailed": "Could not save",
+    "contactLoadFailed": "Could not load contact details"
   },
   "placeholder": {
     "comingSoon": "Back-office screen coming soon",

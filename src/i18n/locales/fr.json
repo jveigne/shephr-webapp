@@ -22,7 +22,8 @@
     "errorUnknown": "Erreur inconnue",
     "error": "Erreur",
     "failure": "Échec",
-    "choose": "— Choisir —"
+    "choose": "— Choisir —",
+    "saving": "Enregistrement…"
   },
   "nav": {
     "clients": "Clients",
@@ -325,7 +326,16 @@
     "currencyEUR": "Euro",
     "currencyUSD": "Dollar US",
     "currencyCHF": "Franc suisse",
-    "currencyCAD": "Dollar canadien"
+    "currencyCAD": "Dollar canadien",
+    "contactTitle": "Coordonnées de support",
+    "contactDesc": "Affichées dans l'application mobile, dans l'espace web et sur les pages publiques (accueil, suppression de compte). Un changement ici est visible partout, sans redéploiement.",
+    "contactEmailLabel": "Adresse e-mail de support",
+    "contactWhatsappLabel": "Numéro WhatsApp",
+    "contactWhatsappHint": "Format international sans « + » ni espace (ex. 33754596796).",
+    "contactWhatsappInvalid": "Numéro invalide : uniquement des chiffres, sans « + » ni espace.",
+    "contactSaved": "Coordonnées mises à jour",
+    "contactSaveFailed": "Enregistrement impossible",
+    "contactLoadFailed": "Chargement des coordonnées impossible"
   },
   "placeholder": {
     "comingSoon": "Écran back-office à venir",

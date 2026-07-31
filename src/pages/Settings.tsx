@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { Icons } from "@/components/icons";
 import { Badge, Button, Field, Input, Select, Toggle, TopBar } from "@/components/primitives";
 import { useToasts } from "@/context/ToastContext";
 import { setLanguage, type AppLang } from "@/i18n";
 import { ADMIN, CATEGORIES } from "@/data/mock";
+import { fetchContactSettings, updateContactSettings } from "@/services/platformService";
 
 function ProfilTab() {
   const { push } = useToasts();
@@ -184,6 +185,101 @@ function SecuTab() {
   );
 }
 
+/**
+ * Coordonnées de support de la plateforme (JP 31/07) — SEUL bloc réellement branché de cet
+ * onglet, les autres sont encore alimentés par `data/mock`.
+ *
+ * <p>Ces coordonnées s'affichent dans l'app mobile (Paramètres › Aide, rattachement à une
+ * assemblée), dans l'espace web (page « Contactez-nous ») et sur les pages publiques. Un
+ * changement ici est visible partout sans redéploiement.
+ */
+function ContactSettingsCard() {
+  const { push } = useToasts();
+  const { t } = useTranslation();
+  const [email, setEmail] = useState("");
+  const [whatsapp, setWhatsapp] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    fetchContactSettings()
+      .then((s) => {
+        if (!alive) return;
+        setEmail(s.email);
+        setWhatsapp(s.whatsappNumber);
+      })
+      .catch((e: Error) => push({ kind: "error", title: t("settings.contactLoadFailed"), msg: e.message }))
+      .finally(() => alive && setLoading(false));
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Le backend refuse tout ce qui n'est pas un numéro international nu : on le dit AVANT
+  // l'appel plutôt que de laisser l'utilisateur découvrir une 400.
+  const whatsappValid = /^\d{6,20}$/.test(whatsapp.trim());
+  const emailValid = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim());
+  const canSave = !loading && !saving && emailValid && whatsappValid;
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const saved = await updateContactSettings({ email: email.trim(), whatsappNumber: whatsapp.trim() });
+      setEmail(saved.email);
+      setWhatsapp(saved.whatsappNumber);
+      push({ kind: "ok", title: t("settings.contactSaved") });
+    } catch (e) {
+      push({ kind: "error", title: t("settings.contactSaveFailed"), msg: (e as Error).message });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="card card-pad" style={{ gridColumn: "1 / -1" }}>
+      <h3 style={{ fontFamily: "var(--font-serif)", fontWeight: 500, fontSize: 17, color: "var(--green-800)", margin: "0 0 6px" }}>
+        {t("settings.contactTitle")}
+      </h3>
+      <div style={{ color: "var(--ink-500)", fontSize: 13, marginBottom: 14 }}>
+        {t("settings.contactDesc")}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+        <Field label={t("settings.contactEmailLabel")}>
+          <Input
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="support@exemple.com"
+            icon={<Icons.Mail size={14} />}
+            disabled={loading}
+          />
+        </Field>
+        <Field label={t("settings.contactWhatsappLabel")} hint={t("settings.contactWhatsappHint")}>
+          <Input
+            value={whatsapp}
+            onChange={(e) => setWhatsapp(e.target.value)}
+            placeholder="33754596796"
+            icon={<Icons.Hash size={14} />}
+            disabled={loading}
+          />
+        </Field>
+      </div>
+      {!loading && whatsapp.trim() !== "" && !whatsappValid && (
+        <div style={{ color: "var(--err, #B86A4A)", fontSize: 12.5, marginTop: 8 }}>
+          {t("settings.contactWhatsappInvalid")}
+        </div>
+      )}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 18 }}>
+        <span style={{ fontSize: 12.5, color: "var(--ink-400)" }}>
+          {whatsappValid ? `https://wa.me/${whatsapp.trim()}` : ""}
+        </span>
+        <Button variant="primary" disabled={!canSave} onClick={save}>
+          {saving ? t("common.saving") : t("common.save")}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function ConfigTab() {
   const { push } = useToasts();
   const { t } = useTranslation();
@@ -201,6 +297,8 @@ function ConfigTab() {
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <ContactSettingsCard />
+
       <div className="card card-pad">
         <h3 style={{ fontFamily: "var(--font-serif)", fontWeight: 500, fontSize: 17, color: "var(--green-800)", margin: "0 0 6px" }}>
           {t("settings.donationCategoriesTitle")}
