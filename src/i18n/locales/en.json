@@ -22,7 +22,8 @@
     "errorUnknown": "Unknown error",
     "error": "Error",
     "failure": "Failed",
-    "choose": "— Choose —"
+    "choose": "— Choose —",
+    "saving": "Saving…"
   },
   "nav": {
     "clients": "Clients",
@@ -65,6 +66,29 @@
     "rejectConfirm": "Reject the request",
     "parentPendingBadge": "to create",
     "approveChainHint": "Approving will also create the “to create” parents of the chain."
+  },
+  "joinRequests": {
+    "title": "Join requests",
+    "intro": "Requests to join an assembly submitted from the apps. Approving attaches the requester (creating the assembly first if it is “to create”); rejecting requires a reason shared with the requester.",
+    "colDate": "Date",
+    "requester": "Requester",
+    "targetAssembly": "Target assembly",
+    "toCreate": "To create: {{name}}",
+    "colRole": "Requested role",
+    "roleLeader": "Leader",
+    "roleMember": "Member",
+    "approve": "Attach",
+    "reject": "Reject",
+    "approveCreateHint": "Approving will first create the “to create” assembly, then attach the requester.",
+    "empty": "No pending join request",
+    "emptyHint": "Join requests submitted from the mobile or web app will appear here.",
+    "approvedToast": "{{name}} attached — request approved",
+    "rejectedToast": "Request from {{name}} rejected",
+    "rejectTitle": "Reject the request from {{name}}?",
+    "rejectSub": "The reason will be visible to the requester in their request history.",
+    "rejectReason": "Rejection reason",
+    "rejectReasonPlaceholder": "E.g.: wrong assembly, request to redo…",
+    "rejectConfirm": "Reject the request"
   },
   "login": {
     "quote": "“Give with joy, ",
@@ -302,7 +326,16 @@
     "currencyEUR": "Euro",
     "currencyUSD": "US dollar",
     "currencyCHF": "Swiss franc",
-    "currencyCAD": "Canadian dollar"
+    "currencyCAD": "Canadian dollar",
+    "contactTitle": "Support contact details",
+    "contactDesc": "Shown in the mobile app, in the web space and on public pages (landing, account deletion). A change here is visible everywhere, with no redeploy.",
+    "contactEmailLabel": "Support email address",
+    "contactWhatsappLabel": "WhatsApp number",
+    "contactWhatsappHint": "International format without “+” or spaces (e.g. 33754596796).",
+    "contactWhatsappInvalid": "Invalid number: digits only, no “+” and no spaces.",
+    "contactSaved": "Contact details updated",
+    "contactSaveFailed": "Could not save",
+    "contactLoadFailed": "Could not load contact details"
   },
   "placeholder": {
     "comingSoon": "Back-office screen coming soon",

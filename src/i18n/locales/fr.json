@@ -22,7 +22,8 @@
     "errorUnknown": "Erreur inconnue",
     "error": "Erreur",
     "failure": "Échec",
-    "choose": "— Choisir —"
+    "choose": "— Choisir —",
+    "saving": "Enregistrement…"
   },
   "nav": {
     "clients": "Clients",
@@ -65,6 +66,29 @@
     "rejectConfirm": "Refuser la demande",
     "parentPendingBadge": "à créer",
     "approveChainHint": "Approuver créera aussi les parents « à créer » de la chaîne."
+  },
+  "joinRequests": {
+    "title": "Demandes de rattachement",
+    "intro": "Demandes de rattachement à une assemblée déposées depuis les apps. Approuver rattache le demandeur (et crée d'abord l'assemblée si elle est « à créer ») ; refuser exige un motif transmis au demandeur.",
+    "colDate": "Date",
+    "requester": "Demandeur",
+    "targetAssembly": "Assemblée visée",
+    "toCreate": "À créer : {{name}}",
+    "colRole": "Rôle demandé",
+    "roleLeader": "Dirigeant",
+    "roleMember": "Fidèle",
+    "approve": "Rattacher",
+    "reject": "Refuser",
+    "approveCreateHint": "Approuver créera d'abord l'assemblée « à créer », puis rattachera le demandeur.",
+    "empty": "Aucune demande de rattachement en attente",
+    "emptyHint": "Les demandes de rattachement déposées depuis le mobile ou le web apparaîtront ici.",
+    "approvedToast": "{{name}} rattaché(e) — demande approuvée",
+    "rejectedToast": "Demande de {{name}} refusée",
+    "rejectTitle": "Refuser la demande de {{name}} ?",
+    "rejectSub": "Le motif sera visible par le demandeur dans son suivi de demandes.",
+    "rejectReason": "Motif du refus",
+    "rejectReasonPlaceholder": "Ex. : assemblée erronée, demande à refaire…",
+    "rejectConfirm": "Refuser la demande"
   },
   "login": {
     "quote": "« Donner avec joie, ",
@@ -302,7 +326,16 @@
     "currencyEUR": "Euro",
     "currencyUSD": "Dollar US",
     "currencyCHF": "Franc suisse",
-    "currencyCAD": "Dollar canadien"
+    "currencyCAD": "Dollar canadien",
+    "contactTitle": "Coordonnées de support",
+    "contactDesc": "Affichées dans l'application mobile, dans l'espace web et sur les pages publiques (accueil, suppression de compte). Un changement ici est visible partout, sans redéploiement.",
+    "contactEmailLabel": "Adresse e-mail de support",
+    "contactWhatsappLabel": "Numéro WhatsApp",
+    "contactWhatsappHint": "Format international sans « + » ni espace (ex. 33754596796).",
+    "contactWhatsappInvalid": "Numéro invalide : uniquement des chiffres, sans « + » ni espace.",
+    "contactSaved": "Coordonnées mises à jour",
+    "contactSaveFailed": "Enregistrement impossible",
+    "contactLoadFailed": "Chargement des coordonnées impossible"
   },
   "placeholder": {
     "comingSoon": "Écran back-office à venir",
