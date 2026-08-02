@@ -23,7 +23,10 @@
     "error": "Error",
     "failure": "Failed",
     "choose": "— Choose —",
-    "saving": "Saving…"
+    "saving": "Saving…",
+    "unexpectedError": "Something went wrong",
+    "unexpectedErrorHint": "This page could not be displayed. Try again or go back to the previous screen.",
+    "retry": "Try again"
   },
   "nav": {
     "clients": "Clients",

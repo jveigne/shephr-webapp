@@ -127,7 +127,8 @@ export default function UtilisateursPage() {
     if (fRole) list = list.filter((u) => u.goalRole === fRole || u.donationRole === fRole);
     if (search.trim()) {
       const q = search.trim().toLowerCase();
-      list = list.filter((u) => u.fullName.toLowerCase().includes(q) || u.email.toLowerCase().includes(q));
+      // fullName / email peuvent remonter null du backend (compte invité non finalisé) : jamais de .toLowerCase() direct.
+      list = list.filter((u) => (u.fullName ?? "").toLowerCase().includes(q) || (u.email ?? "").toLowerCase().includes(q));
     }
     return list.map((u) => ({ ...u, _key: u.id }));
     // eslint-disable-next-line react-hooks/exhaustive-deps

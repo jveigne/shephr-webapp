@@ -26,7 +26,7 @@ export function UserCombobox({
   const q = query.trim().toLowerCase();
   const candidates = users.filter((u) => u.id !== excludeId);
   const matches = q
-    ? candidates.filter((u) => u.fullName.toLowerCase().includes(q) || u.email.toLowerCase().includes(q))
+    ? candidates.filter((u) => (u.fullName ?? "").toLowerCase().includes(q) || (u.email ?? "").toLowerCase().includes(q))
     : candidates;
   const shown = matches.slice(0, COMBOBOX_MAX_RESULTS);
 

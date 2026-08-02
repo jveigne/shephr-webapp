@@ -1,10 +1,11 @@
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { AuthProvider } from "@/context/AuthContext";
 import { ToastProvider } from "@/context/ToastContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { AppShell } from "@/components/AppShell";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Placeholder } from "@/components/Placeholder";
 
 import LoginPage from "@/pages/Login";
@@ -19,9 +20,13 @@ import SettingsPage from "@/pages/Settings";
 const queryClient = new QueryClient();
 
 function Shielded({ children }: { children: JSX.Element }) {
+  // key sur le pathname : une page qui a planté se remonte proprement dès qu'on navigue ailleurs.
+  const { pathname } = useLocation();
   return (
     <ProtectedRoute>
-      <AppShell>{children}</AppShell>
+      <AppShell>
+        <ErrorBoundary key={pathname}>{children}</ErrorBoundary>
+      </AppShell>
     </ProtectedRoute>
   );
 }
