@@ -23,7 +23,10 @@
     "error": "Erreur",
     "failure": "Échec",
     "choose": "— Choisir —",
-    "saving": "Enregistrement…"
+    "saving": "Enregistrement…",
+    "unexpectedError": "Une erreur inattendue est survenue",
+    "unexpectedErrorHint": "Cette page n'a pas pu s'afficher. Réessayez ou revenez à l'écran précédent.",
+    "retry": "Réessayer"
   },
   "nav": {
     "clients": "Clients",
