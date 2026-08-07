@@ -9,7 +9,7 @@ import { invitationLink } from "@/services/ministryService";
 import type { NodeLevel, TreeNode } from "@/lib/orgTree";
 import { RESP_ROLES_BY_LEVEL, buildGoalAttachment, isResponsableOf } from "@/lib/responsables";
 import {
-  deactivateUser, inviteUser, reassignUser, regenerateInvitation,
+  deactivateUser, inviteUser, reassignUser, regenerateInvitation, userLogin,
   type AdminUserResponse, type ModuleRole,
 } from "@/services/userService";
 
@@ -95,7 +95,7 @@ export function ResponsablesDrawer({
   };
   const openEdit = (u: AdminUserResponse) => {
     if (!node) return;
-    setFullName(u.fullName); setEmail(u.email);
+    setFullName(u.fullName); setEmail(u.email ?? "");
     setEditLevel(node.level);
     setEditEntity(node.level === "MINISTRY" ? "" : node.id);
     setRole((u.goalRole ?? u.donationRole ?? RESP_ROLES_BY_LEVEL[node.level][0] ?? "") as ModuleRole | "");
@@ -209,7 +209,7 @@ export function ResponsablesDrawer({
                         {r && <Badge tone="earth">{t(`responsables.role.${r}`)}</Badge>}
                         {!u.active && <Badge tone="gray">{t("responsables.inactive")}</Badge>}
                       </div>
-                      <div style={{ fontSize: 13, color: "var(--ink-500)" }}>{u.email}</div>
+                      <div style={{ fontSize: 13, color: "var(--ink-500)" }}>{userLogin(u)}</div>
                       <div style={{ fontSize: 13, color: "var(--ink-500)" }}>
                         {t("responsables.supervisor")} : {u.supervisorId ? (nameById.get(u.supervisorId) ?? "—") : t("responsables.root")}
                       </div>

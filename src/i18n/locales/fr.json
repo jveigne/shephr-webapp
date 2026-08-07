@@ -471,6 +471,24 @@
     "roleTitle": "Modifier le rôle",
     "roleSavedToast": "Rôle mis à jour",
     "roleMinistryWideHint": "Rôle ministère-large : aucun rattachement géographique (vue globale).",
-    "roleHint": "Le rattachement est reposé en bloc selon le rôle (Assemblée, Ville, Région ou Nation) — l'ancien rattachement est remplacé. Le superviseur détermine l'organigramme."
+    "roleHint": "Le rattachement est reposé en bloc selon le rôle (Assemblée, Ville, Région ou Nation) — l'ancien rattachement est remplacé. Le superviseur détermine l'organigramme.",
+    "colLogin": "Identifiant",
+    "colUsername": "Identifiant de connexion",
+    "usernameHint": "Identifiant attribué par le back-office",
+    "emailOptional": "Email de contact (facultatif)",
+    "emailOptionalHint": "Laisser vide si la personne n'a pas d'email — le compte fonctionne avec le seul identifiant.",
+    "create": "Nouvel utilisateur",
+    "createTitle": "Créer un utilisateur",
+    "createSub": "Le compte est créé inactif : la personne pose son mot de passe avec le code d'activation.",
+    "createConfirm": "Créer le compte",
+    "createHint": "Le superviseur définit la position dans l'organigramme — c'est lui qui détermine ce que la personne voit, pas le rattachement géographique.",
+    "createdToast": "Compte créé",
+    "createdToastMsg": "Transmettez le code d'activation à la personne.",
+    "optional": "facultatif",
+    "noAttachment": "— aucun rattachement —",
+    "entityOptionalHint": "Facultatif à ce niveau : le rôle peut être conféré sans région, ville ni nation, et le rattachement posé plus tard.",
+    "codeTitle": "Code d'activation",
+    "codeHint": "Transmettez ce code à la personne. Elle le saisit dans l'application pour choisir son mot de passe et activer son compte.",
+    "codeExpiry": "Usage unique, valable 14 jours. Régénérable depuis la page Structure si besoin."
   }
 }

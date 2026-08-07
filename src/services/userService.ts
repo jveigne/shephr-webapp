@@ -7,7 +7,10 @@ export type ModuleRole =
 
 export interface AdminUserResponse {
   id: string;
-  email: string;
+  /** Email de CONTACT — facultatif : les comptes Shephr sont créés sur `username`. */
+  email: string | null;
+  /** Identifiant de CONNEXION attribué par le back-office (type pveigne@shephr.org). */
+  username: string | null;
   fullName: string;
   superAdmin: boolean;
   ministryId: string | null;
@@ -35,8 +38,19 @@ export interface AdminUserResponse {
 
 interface PageResponse<T> { content: T[]; totalElements: number; }
 
+/**
+ * Libellé d'identification d'un compte. L'identifiant de connexion prime sur l'email : les comptes
+ * Shephr sont créés sur `username` et n'ont souvent PAS d'email — afficher `email` seul laisse une
+ * ligne vide dans les listes.
+ */
+export function userLogin(u: Pick<AdminUserResponse, "username" | "email">): string {
+  return u.username ?? u.email ?? "—";
+}
+
 export interface InviteUserRequest {
-  email: string;
+  /** Identifiant OU email requis (au moins un). Les comptes Shephr partent de l'identifiant. */
+  email?: string;
+  username?: string;
   fullName: string;
   ministryId?: string;
   supervisorId?: string | null;
@@ -46,6 +60,9 @@ export interface InviteUserRequest {
   goalCityId?: string;
   goalUnitIds?: string[];
   goalCountryIds?: string[];
+  /** Multi-rattachements (home + set) : villes d'un DIRIGEANT / régions d'un SENIOR. */
+  goalCityIds?: string[];
+  goalZoneIds?: string[];
 }
 
 export interface InviteUserResponse {
@@ -58,6 +75,7 @@ export interface InviteUserResponse {
 export interface UpdateUserRequest {
   fullName?: string;
   email?: string;
+  username?: string;
   supervisorId?: string | null;
   goalRole?: ModuleRole;
   goalUnitId?: string;
