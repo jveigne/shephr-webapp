@@ -471,6 +471,24 @@
     "roleTitle": "Edit role",
     "roleSavedToast": "Role updated",
     "roleMinistryWideHint": "Ministry-wide role: no geographic attachment (global view).",
-    "roleHint": "The attachment is reset as a block according to the role (Assembly, City, Region or Nation) — the previous attachment is replaced. The supervisor defines the org chart."
+    "roleHint": "The attachment is reset as a block according to the role (Assembly, City, Region or Nation) — the previous attachment is replaced. The supervisor defines the org chart.",
+    "colLogin": "Login",
+    "colUsername": "Login identifier",
+    "usernameHint": "Identifier assigned by the back office",
+    "emailOptional": "Contact email (optional)",
+    "emailOptionalHint": "Leave empty if the person has no email — the account works with the identifier alone.",
+    "create": "New user",
+    "createTitle": "Create a user",
+    "createSub": "The account is created inactive: the person sets their own password using the activation code.",
+    "createConfirm": "Create account",
+    "createHint": "The supervisor defines the position in the org chart — that is what determines what the person sees, not the geographic attachment.",
+    "createdToast": "Account created",
+    "createdToastMsg": "Send the activation code to the person.",
+    "optional": "optional",
+    "noAttachment": "— no attachment —",
+    "entityOptionalHint": "Optional at this level: the role can be granted without a region, city or nation, and the attachment set later.",
+    "codeTitle": "Activation code",
+    "codeHint": "Send this code to the person. They enter it in the app to choose a password and activate their account.",
+    "codeExpiry": "Single use, valid for 14 days. Can be regenerated from the Structure page if needed."
   }
 }

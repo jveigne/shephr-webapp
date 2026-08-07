@@ -7,11 +7,19 @@ import { useToasts } from "@/context/ToastContext";
 import { listMinistries, type MinistryResponse } from "@/services/ministryService";
 import { fetchMinistryStructure } from "@/services/orgService";
 import {
-  deleteUser, listMinistryUsers, reassignUser, setUserPassword, updateUserInfo,
-  type AdminUserResponse, type ModuleRole,
+  deleteUser, inviteUser, listMinistryUsers, reassignUser, setUserPassword, updateUserInfo, userLogin,
+  type AdminUserResponse, type InviteUserRequest, type ModuleRole,
 } from "@/services/userService";
 
 const ROLES: ModuleRole[] = ["MEMBRE", "DIRIGEANT_UNITE", "DIRIGEANT", "DIRIGEANT_SENIOR", "DIRIGEANT_COORDINATEUR", "LEADER", "SECRETARIAT"];
+
+/**
+ * Rôles pour lesquels le rattachement géographique est OBLIGATOIRE : un responsable d'assemblée ou
+ * de ville sans assemblée ni ville n'a pas de sens. À partir du rang SENIOR le rattachement est
+ * facultatif — la visibilité vient de l'organigramme de personnes (superviseur), pas de la carte,
+ * ce qui permet de nommer un senior / coordinateur / leader avant que sa région n'existe.
+ */
+const ENTITY_REQUIRED_ROLES: ModuleRole[] = ["MEMBRE", "DIRIGEANT_UNITE", "DIRIGEANT"];
 
 export default function UtilisateursPage() {
   const { t } = useTranslation();
@@ -28,7 +36,19 @@ export default function UtilisateursPage() {
   const [editUser, setEditUser] = useState<AdminUserResponse | null>(null);
   const [editName, setEditName] = useState("");
   const [editEmail, setEditEmail] = useState("");
+  const [editUsername, setEditUsername] = useState("");
   const [editActive, setEditActive] = useState(true);
+  // Création d'un compte depuis le back-office : identifiant + rôle, rattachement facultatif.
+  const [createOpen, setCreateOpen] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newUsername, setNewUsername] = useState("");
+  const [newEmail, setNewEmail] = useState("");
+  const [newRole, setNewRole] = useState<ModuleRole>("DIRIGEANT_SENIOR");
+  const [newEntity, setNewEntity] = useState("");
+  const [newEntities, setNewEntities] = useState<string[]>([]);
+  const [newSupervisor, setNewSupervisor] = useState("");
+  // Code d'activation retourné à la création : à transmettre, la personne pose son mot de passe.
+  const [created, setCreated] = useState<{ login: string; code: string | null } | null>(null);
   const [pwUser, setPwUser] = useState<AdminUserResponse | null>(null);
   const [pw, setPw] = useState("");
   const [delUser, setDelUser] = useState<AdminUserResponse | null>(null);
@@ -127,8 +147,11 @@ export default function UtilisateursPage() {
     if (fRole) list = list.filter((u) => u.goalRole === fRole || u.donationRole === fRole);
     if (search.trim()) {
       const q = search.trim().toLowerCase();
-      // fullName / email peuvent remonter null du backend (compte invité non finalisé) : jamais de .toLowerCase() direct.
-      list = list.filter((u) => (u.fullName ?? "").toLowerCase().includes(q) || (u.email ?? "").toLowerCase().includes(q));
+      // fullName / email / username peuvent remonter null du backend (compte créé sur l'un des deux
+      // seulement) : jamais de .toLowerCase() direct.
+      list = list.filter((u) => (u.fullName ?? "").toLowerCase().includes(q)
+        || (u.email ?? "").toLowerCase().includes(q)
+        || (u.username ?? "").toLowerCase().includes(q));
     }
     return list.map((u) => ({ ...u, _key: u.id }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -137,7 +160,13 @@ export default function UtilisateursPage() {
   const invalidate = () => qc.invalidateQueries({ queryKey: ["ministry-users", ministryId] });
 
   const updateM = useMutation({
-    mutationFn: () => updateUserInfo(editUser!.id, { fullName: editName.trim(), email: editEmail.trim(), active: editActive }),
+    // Champs laissés vides = inchangés côté backend (null = « ne touche pas »).
+    mutationFn: () => updateUserInfo(editUser!.id, {
+      fullName: editName.trim(),
+      email: editEmail.trim() || undefined,
+      username: editUsername.trim() || undefined,
+      active: editActive,
+    }),
     onSuccess: () => { invalidate(); setEditUser(null); push({ kind: "ok", title: t("users.savedToast"), msg: "" }); },
     onError: (e: unknown) => push({ kind: "error", title: t("common.failure"), msg: e instanceof Error ? e.message : t("common.error") }),
   });
@@ -152,7 +181,16 @@ export default function UtilisateursPage() {
     onError: (e: unknown) => push({ kind: "error", title: t("users.deleteFailToast"), msg: e instanceof Error ? e.message : t("common.error") }),
   });
 
-  const openEdit = (u: AdminUserResponse) => { setEditName(u.fullName); setEditEmail(u.email); setEditActive(u.active); setEditUser(u); };
+  const openEdit = (u: AdminUserResponse) => {
+    setEditName(u.fullName ?? "");
+    setEditEmail(u.email ?? "");
+    setEditUsername(u.username ?? "");
+    setEditActive(u.active);
+    setEditUser(u);
+  };
+
+  /** Libellé d'identification : l'identifiant de connexion prime, l'email n'est qu'un contact. */
+  
 
   // ---- Changement de rôle (mapping décision #7 : DIRIGEANT=Ville, SENIOR=Région, COORDINATEUR=Nation) ----
   const entityKind = (r: ModuleRole): "unit" | "city" | "zone" | "country" | null =>
@@ -182,6 +220,20 @@ export default function UtilisateursPage() {
   };
 
   const isMultiKind = (r: ModuleRole) => entityKind(r) === "city" || entityKind(r) === "zone";
+  const entityRequired = (r: ModuleRole) => ENTITY_REQUIRED_ROLES.includes(r);
+
+  const optionsForKind = (r: ModuleRole): Array<{ id: string; name: string }> =>
+    entityKind(r) === "unit" ? (org?.units ?? [])
+    : entityKind(r) === "city" ? (org?.localities ?? [])
+    : entityKind(r) === "zone" ? (org?.zones ?? [])
+    : entityKind(r) === "country" ? (org?.countries ?? [])
+    : [];
+
+  const labelForKind = (r: ModuleRole) =>
+    entityKind(r) === "unit" ? t("subscriptions.level.UNIT")
+    : entityKind(r) === "city" ? t("subscriptions.level.LOCALITY")
+    : entityKind(r) === "zone" ? t("subscriptions.level.ZONE")
+    : t("subscriptions.level.COUNTRY");
 
   const openRole = (u: AdminUserResponse) => {
     const r = u.goalRole ?? "MEMBRE";
@@ -203,23 +255,62 @@ export default function UtilisateursPage() {
     onError: (e: unknown) => push({ kind: "error", title: t("common.failure"), msg: e instanceof Error ? e.message : t("common.error") }),
   });
 
-  const roleEntityOptions: Array<{ id: string; name: string }> =
-    entityKind(roleValue) === "unit" ? (org?.units ?? [])
-    : entityKind(roleValue) === "city" ? (org?.localities ?? [])
-    : entityKind(roleValue) === "zone" ? (org?.zones ?? [])
-    : entityKind(roleValue) === "country" ? (org?.countries ?? [])
-    : [];
-  const roleEntityLabel =
-    entityKind(roleValue) === "unit" ? t("subscriptions.level.UNIT")
-    : entityKind(roleValue) === "city" ? t("subscriptions.level.LOCALITY")
-    : entityKind(roleValue) === "zone" ? t("subscriptions.level.ZONE")
-    : t("subscriptions.level.COUNTRY");
-  const roleValid = entityKind(roleValue) == null
+  const roleEntityOptions = optionsForKind(roleValue);
+  const roleEntityLabel = labelForKind(roleValue);
+  const roleValid = !entityRequired(roleValue)
     || (isMultiKind(roleValue) ? roleEntities.length > 0 : roleEntity !== "");
+
+  // ---- Création d'un compte (invitation : le code d'activation permet à la personne de poser
+  // son mot de passe elle-même sur l'écran /invitation/{token}) ----
+  const resetCreate = () => {
+    setNewName(""); setNewUsername(""); setNewEmail("");
+    setNewRole("DIRIGEANT_SENIOR"); setNewEntity(""); setNewEntities([]); setNewSupervisor("");
+  };
+
+  const createM = useMutation({
+    mutationFn: () => {
+      const kind = entityKind(newRole);
+      const body: InviteUserRequest = {
+        fullName: newName.trim(),
+        username: newUsername.trim() || undefined,
+        email: newEmail.trim() || undefined,
+        ministryId,
+        supervisorId: newSupervisor || null,
+        goalRole: newRole,
+      };
+      // Rattachement posé selon le rôle, uniquement s'il a été renseigné (facultatif ≥ SENIOR).
+      const picked = isMultiKind(newRole) ? newEntities : (newEntity ? [newEntity] : []);
+      if (kind === "unit" && picked[0]) body.goalUnitId = picked[0];
+      if (kind === "city" && picked[0]) { body.goalCityId = picked[0]; body.goalCityIds = picked; }
+      if (kind === "zone" && picked[0]) { body.goalZoneId = picked[0]; body.goalZoneIds = picked; }
+      if (kind === "country" && picked.length) body.goalCountryIds = picked;
+      return inviteUser(body);
+    },
+    onSuccess: (res) => {
+      invalidate();
+      setCreateOpen(false);
+      setCreated({ login: newUsername.trim() || newEmail.trim(), code: res.invitationShortCode });
+      resetCreate();
+      push({ kind: "ok", title: t("users.createdToast"), msg: t("users.createdToastMsg") });
+    },
+    onError: (e: unknown) => push({ kind: "error", title: t("common.failure"), msg: e instanceof Error ? e.message : t("common.error") }),
+  });
+
+  const createValid = newName.trim() !== ""
+    && (newUsername.trim() !== "" || newEmail.trim() !== "")
+    && (!entityRequired(newRole) || (isMultiKind(newRole) ? newEntities.length > 0 : newEntity !== ""));
 
   const cols = [
     { label: t("users.colName"), render: (u: AdminUserResponse) => <span style={{ fontWeight: 500 }}>{u.fullName}</span> },
-    { label: t("users.colEmail"), render: (u: AdminUserResponse) => <span style={{ color: "var(--ink-600)" }}>{u.email}</span> },
+    {
+      label: t("users.colLogin"),
+      render: (u: AdminUserResponse) => (
+        <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.3 }}>
+          <span style={{ color: "var(--ink-600)" }}>{userLogin(u)}</span>
+          {u.username && u.email && <span style={{ color: "var(--ink-400)", fontSize: 12 }}>{u.email}</span>}
+        </div>
+      ),
+    },
     { label: t("users.colRole"), render: (u: AdminUserResponse) => { const r = u.goalRole ?? u.donationRole; return r ? <Badge tone="earth">{t(`responsables.role.${r}`)}</Badge> : <span style={{ color: "var(--ink-400)" }}>—</span>; } },
     { label: t("users.colAttachment"), render: (u: AdminUserResponse) => <span style={{ color: "var(--ink-500)" }}>{attachmentLabel(u)}</span> },
     { label: t("users.colSupervisor"), render: (u: AdminUserResponse) => <span style={{ color: "var(--ink-500)" }}>{u.supervisorId ? (userName.get(u.supervisorId) ?? "—") : t("responsables.root")}</span> },
@@ -248,6 +339,12 @@ export default function UtilisateursPage() {
               <option value="">{t("users.pickMinistry")}</option>
               {(ministriesQ.data ?? []).map((m: MinistryResponse) => <option key={m.id} value={m.id}>{m.name}</option>)}
             </Select>
+            <div style={{ marginLeft: "auto" }}>
+              <Button variant="primary" size="sm" disabled={!ministryId}
+                onClick={() => { resetCreate(); setCreateOpen(true); }}>
+                {t("users.create")}
+              </Button>
+            </div>
           </div>
 
           {!ministryId ? (
@@ -295,19 +392,78 @@ export default function UtilisateursPage() {
         </div>
       </div>
 
+      {/* Création d'un compte */}
+      <Modal open={createOpen} onClose={() => setCreateOpen(false)} title={t("users.createTitle")} sub={t("users.createSub")}
+        footer={<><Button variant="ghost" onClick={() => setCreateOpen(false)}>{t("common.cancel")}</Button>
+          <Button variant="primary" disabled={!createValid || createM.isPending} onClick={() => createM.mutate()}>{createM.isPending ? t("common.loading") : t("users.createConfirm")}</Button></>}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <Field label={t("users.colName")}><Input value={newName} onChange={(e) => setNewName(e.target.value)} /></Field>
+          <Field label={t("users.colUsername")} hint={t("users.usernameHint")}>
+            <Input value={newUsername} onChange={(e) => setNewUsername(e.target.value)} placeholder="prenom.nom@shephr.org" />
+          </Field>
+          <Field label={t("users.emailOptional")} hint={t("users.emailOptionalHint")}>
+            <Input value={newEmail} onChange={(e) => setNewEmail(e.target.value)} />
+          </Field>
+          <Field label={t("users.colRole")}>
+            <Select value={newRole} onChange={(e) => { setNewRole(e.target.value as ModuleRole); setNewEntity(""); setNewEntities([]); }}>
+              {ROLES.map((r) => <option key={r} value={r}>{t(`responsables.role.${r}`)}</option>)}
+            </Select>
+          </Field>
+          {entityKind(newRole) == null ? (
+            <p style={{ margin: 0, fontSize: 13, color: "var(--ink-500)" }}>{t("users.roleMinistryWideHint")}</p>
+          ) : isMultiKind(newRole) ? (
+            <Field label={`${labelForKind(newRole)}${entityRequired(newRole) ? "" : ` · ${t("users.optional")}`}`}
+              hint={entityRequired(newRole) ? t("users.multiEntityHint") : t("users.entityOptionalHint")}>
+              <EntityMultiPicker options={optionsForKind(newRole)} selected={newEntities} onChange={setNewEntities}
+                placeholder={t("users.searchEntityPlaceholder")} />
+            </Field>
+          ) : (
+            <Field label={`${labelForKind(newRole)}${entityRequired(newRole) ? "" : ` · ${t("users.optional")}`}`}
+              hint={entityRequired(newRole) ? undefined : t("users.entityOptionalHint")}>
+              <Select value={newEntity} onChange={(e) => setNewEntity(e.target.value)}>
+                <option value="">{entityRequired(newRole) ? t("common.choose") : t("users.noAttachment")}</option>
+                {optionsForKind(newRole).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+              </Select>
+            </Field>
+          )}
+          <SupervisorSelect users={usersQ.data ?? []} value={newSupervisor} onChange={setNewSupervisor} t={t} />
+          <p style={{ margin: 0, fontSize: 12.5, color: "var(--ink-400)" }}>{t("users.createHint")}</p>
+        </div>
+      </Modal>
+
+      {/* Code d'activation à transmettre */}
+      <Modal open={!!created} onClose={() => setCreated(null)} title={t("users.codeTitle")} sub={created?.login}
+        footer={<Button variant="primary" onClick={() => setCreated(null)}>{t("common.close")}</Button>}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <p style={{ margin: 0, color: "var(--ink-600)" }}>{t("users.codeHint")}</p>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 16px", borderRadius: 10, background: "var(--parchment,#faf7f0)", border: "1px solid var(--line,#eee)" }}>
+            <span style={{ fontSize: 26, fontWeight: 700, letterSpacing: 3, fontFamily: "ui-monospace, monospace" }}>
+              {created?.code ?? "—"}
+            </span>
+            {created?.code && (
+              <Button variant="ghost" size="sm" onClick={() => navigator.clipboard?.writeText(created.code!)}>
+                {t("common.copy")}
+              </Button>
+            )}
+          </div>
+          <p style={{ margin: 0, fontSize: 12.5, color: "var(--ink-400)" }}>{t("users.codeExpiry")}</p>
+        </div>
+      </Modal>
+
       {/* Édition infos */}
-      <Modal open={!!editUser} onClose={() => setEditUser(null)} title={t("users.editTitle")} sub={editUser?.email}
+      <Modal open={!!editUser} onClose={() => setEditUser(null)} title={t("users.editTitle")} sub={editUser ? userLogin(editUser) : undefined}
         footer={<><Button variant="ghost" onClick={() => setEditUser(null)}>{t("common.cancel")}</Button>
           <Button variant="primary" disabled={!editName.trim() || updateM.isPending} onClick={() => updateM.mutate()}>{updateM.isPending ? t("common.loading") : t("common.save")}</Button></>}>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <Field label={t("users.colName")}><Input value={editName} onChange={(e) => setEditName(e.target.value)} /></Field>
-          <Field label={t("users.colEmail")}><Input value={editEmail} onChange={(e) => setEditEmail(e.target.value)} /></Field>
+          <Field label={t("users.colUsername")} hint={t("users.usernameHint")}><Input value={editUsername} onChange={(e) => setEditUsername(e.target.value)} /></Field>
+          <Field label={t("users.emailOptional")}><Input value={editEmail} onChange={(e) => setEditEmail(e.target.value)} /></Field>
           <Field label={t("users.colStatus")}><Toggle checked={editActive} onChange={setEditActive} label={editActive ? t("users.active") : t("users.inactive")} /></Field>
         </div>
       </Modal>
 
       {/* Changement de rôle */}
-      <Modal open={!!roleUser} onClose={() => setRoleUser(null)} title={t("users.roleTitle")} sub={roleUser ? `${roleUser.fullName} · ${roleUser.email}` : undefined}
+      <Modal open={!!roleUser} onClose={() => setRoleUser(null)} title={t("users.roleTitle")} sub={roleUser ? `${roleUser.fullName} · ${userLogin(roleUser)}` : undefined}
         footer={<><Button variant="ghost" onClick={() => setRoleUser(null)}>{t("common.cancel")}</Button>
           <Button variant="primary" disabled={!roleValid || roleM.isPending} onClick={() => roleM.mutate()}>{roleM.isPending ? t("common.loading") : t("common.save")}</Button></>}>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -355,7 +511,7 @@ export default function UtilisateursPage() {
       </Modal>
 
       {/* Suppression */}
-      <Modal open={!!delUser} onClose={() => setDelUser(null)} title={t("users.deleteTitle")} sub={delUser ? `${delUser.fullName} · ${delUser.email}` : undefined}
+      <Modal open={!!delUser} onClose={() => setDelUser(null)} title={t("users.deleteTitle")} sub={delUser ? `${delUser.fullName} · ${userLogin(delUser)}` : undefined}
         footer={<><Button variant="ghost" onClick={() => setDelUser(null)}>{t("common.cancel")}</Button>
           <Button variant="danger" disabled={delM.isPending} onClick={() => delM.mutate()}>{delM.isPending ? t("common.loading") : t("users.confirmDelete")}</Button></>}>
         <p style={{ margin: 0, color: "var(--ink-600)" }}>{t("users.deleteWarning")}</p>

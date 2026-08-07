@@ -1,6 +1,6 @@
 import { useState, type CSSProperties } from "react";
 import { Field, Input } from "./primitives";
-import type { AdminUserResponse } from "@/services/userService";
+import { userLogin, type AdminUserResponse } from "@/services/userService";
 
 // Combobox avec recherche (nom / email) : indispensable dès que le ministère dépasse
 // quelques dizaines d'utilisateurs — un <select> natif de 1000 entrées est inutilisable.
@@ -26,7 +26,7 @@ export function UserCombobox({
   const q = query.trim().toLowerCase();
   const candidates = users.filter((u) => u.id !== excludeId);
   const matches = q
-    ? candidates.filter((u) => (u.fullName ?? "").toLowerCase().includes(q) || (u.email ?? "").toLowerCase().includes(q))
+    ? candidates.filter((u) => (u.fullName ?? "").toLowerCase().includes(q) || (u.email ?? "").toLowerCase().includes(q) || (u.username ?? "").toLowerCase().includes(q))
     : candidates;
   const shown = matches.slice(0, COMBOBOX_MAX_RESULTS);
 
@@ -41,7 +41,7 @@ export function UserCombobox({
     <Field label={label} hint={hint}>
       <div style={{ position: "relative" }}>
         <Input
-          value={open ? query : (selected ? `${selected.fullName} — ${selected.email}` : "")}
+          value={open ? query : (selected ? `${selected.fullName} — ${userLogin(selected)}` : "")}
           placeholder={open || !emptyOptionLabel ? t("responsables.supervisorSearchPlaceholder") : emptyOptionLabel}
           onFocus={() => { setQuery(""); setOpen(true); }}
           onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
@@ -64,7 +64,7 @@ export function UserCombobox({
             {shown.map((p) => (
               <div key={p.id} style={rowStyle(p.id === value)} onClick={() => pick(p.id)}>
                 <div style={{ fontWeight: 500 }}>{p.fullName}</div>
-                <div style={{ fontSize: 12, color: "var(--ink-500)" }}>{p.email}</div>
+                <div style={{ fontSize: 12, color: "var(--ink-500)" }}>{userLogin(p)}</div>
               </div>
             ))}
             {matches.length === 0 && (
