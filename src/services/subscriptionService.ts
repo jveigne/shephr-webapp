@@ -173,14 +173,12 @@ export function listUnits(ministryId: string): Promise<OrgEntityOption[]> {
 // ---- Org hierarchy (avec IDs parents) — pour reconstruire l'arbre côté front ----
 export interface OrgCountryNode { id: string; name: string; code: string }
 export interface OrgZoneNode { id: string; name: string; countryId: string }
-export interface OrgTeamNode { id: string; name: string; zoneId: string }
 export interface OrgLocalityNode { id: string; name: string; zoneId: string | null; teamId: string | null }
 export interface OrgUnitNode { id: string; name: string; localityId: string | null; type: string }
 
 export interface MinistryOrg {
   countries: OrgCountryNode[];
   zones: OrgZoneNode[];
-  teams: OrgTeamNode[];
   localities: OrgLocalityNode[];
   units: OrgUnitNode[];
 }
@@ -198,13 +196,10 @@ export async function fetchMinistryOrg(ministryId: string): Promise<MinistryOrg>
     ),
   );
   const zones = zonesNested.flat();
-  const teamsNested = await Promise.all(
-    zones.map((z) =>
-      apiFetch<Array<{ id: string; name: string; zoneId: string }>>(
-        `/api/org/admin/teams?zoneId=${z.id}`,
-      ),
-    ),
-  );
+  // Les teams sont dissoutes (Chantier B) : plus aucun contrôleur ne sert /api/org/admin/teams.
+  // L'appel qui subsistait ici prenait un 404 et faisait rejeter tout le chargement de la
+  // structure — l'arbre des abonnements affichait « pas encore de structure » pour TOUS les
+  // ministères pourtant peuplés. Ces données n'étaient d'ailleurs jamais lues par buildTree.
   const [localities, units] = await Promise.all([
     apiFetch<Array<{ id: string; name: string; zoneId: string | null; teamId: string | null }>>(
       `/api/org/admin/localities?ministryId=${ministryId}`,
@@ -216,7 +211,6 @@ export async function fetchMinistryOrg(ministryId: string): Promise<MinistryOrg>
   return {
     countries: countries.map((c) => ({ id: c.id, name: c.name, code: c.code })),
     zones: zones.map((z) => ({ id: z.id, name: z.name, countryId: z.countryId })),
-    teams: teamsNested.flat().map((tm) => ({ id: tm.id, name: tm.name, zoneId: tm.zoneId })),
     localities: localities.map((l) => ({ id: l.id, name: l.name, zoneId: l.zoneId, teamId: l.teamId })),
     units: units.map((u) => ({ id: u.id, name: u.name, localityId: u.localityId, type: u.type })),
   };
