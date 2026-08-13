@@ -1,17 +1,21 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Badge, Button, Field, Input, Modal, Select, Table, Toggle, TopBar } from "@/components/primitives";
-import { SupervisorSelect } from "@/components/UserCombobox";
+import { RemoteSupervisorSelect, type UserRef } from "@/components/UserCombobox";
 import { useToasts } from "@/context/ToastContext";
+import { useDebounced } from "@/hooks/useDebounced";
 import { listMinistries, type MinistryResponse } from "@/services/ministryService";
 import { fetchMinistryStructure } from "@/services/orgService";
 import {
-  deleteUser, inviteUser, listMinistryUsers, reassignUser, setUserPassword, updateUserInfo, userLogin,
+  deleteUser, inviteUser, reassignUser, searchUsers, setUserPassword, updateUserInfo, userLogin,
   type AdminUserResponse, type InviteUserRequest, type ModuleRole,
 } from "@/services/userService";
 
 const ROLES: ModuleRole[] = ["MEMBRE", "DIRIGEANT_UNITE", "DIRIGEANT", "DIRIGEANT_SENIOR", "DIRIGEANT_COORDINATEUR", "LEADER", "SECRETARIAT"];
+
+/** Tailles de page proposées — 25 par défaut : une page qui tient à l'écran, sans scroll infini. */
+const PAGE_SIZES = [25, 50, 100];
 
 /**
  * Rôles pour lesquels le rattachement géographique est OBLIGATOIRE : un responsable d'assemblée ou
@@ -32,6 +36,8 @@ export default function UtilisateursPage() {
   const [fUnit, setFUnit] = useState("");
   const [fRole, setFRole] = useState("");
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(0);
+  const [size, setSize] = useState(PAGE_SIZES[0]);
 
   const [editUser, setEditUser] = useState<AdminUserResponse | null>(null);
   const [editName, setEditName] = useState("");
@@ -47,6 +53,8 @@ export default function UtilisateursPage() {
   const [newEntity, setNewEntity] = useState("");
   const [newEntities, setNewEntities] = useState<string[]>([]);
   const [newSupervisor, setNewSupervisor] = useState("");
+  // Le superviseur est choisi par recherche serveur : on garde le compte retenu pour l'afficher.
+  const [newSupervisorRef, setNewSupervisorRef] = useState<UserRef | undefined>(undefined);
   // Code d'activation retourné à la création : à transmettre, la personne pose son mot de passe.
   const [created, setCreated] = useState<{ login: string; code: string | null } | null>(null);
   const [pwUser, setPwUser] = useState<AdminUserResponse | null>(null);
@@ -59,13 +67,35 @@ export default function UtilisateursPage() {
   // Multi-rattachements (villes d'un DIRIGEANT, régions d'un SENIOR) : la première est la principale.
   const [roleEntities, setRoleEntities] = useState<string[]>([]);
   const [roleSupervisor, setRoleSupervisor] = useState("");
+  const [roleSupervisorRef, setRoleSupervisorRef] = useState<UserRef | undefined>(undefined);
 
   const ministriesQ = useQuery({ queryKey: ["ministries"], queryFn: listMinistries });
+
+  // Recherche et filtres CÔTÉ SERVEUR : la liste peut compter des milliers de comptes, on ne charge
+  // jamais l'annuaire complet. La recherche (nom approché, identifiant, email) porte sur TOUT le
+  // périmètre — le backend ignore volontairement le filtre géographique quand elle est renseignée.
+  const debouncedSearch = useDebounced(search);
+  const searching = debouncedSearch.trim() !== "";
+  // Le backend prend le sous-arbre du nœud : on ne transmet que le filtre le plus fin.
+  const placeNodeId = fUnit || fZone || fCountry || undefined;
+
   const usersQ = useQuery({
-    queryKey: ["ministry-users", ministryId],
-    queryFn: () => listMinistryUsers(ministryId),
-    enabled: !!ministryId,
+    queryKey: ["users-page", ministryId, debouncedSearch, placeNodeId ?? "", fRole, page, size],
+    queryFn: () => searchUsers({
+      ministryId: ministryId || undefined,
+      search: debouncedSearch,
+      placeNodeId: searching ? undefined : placeNodeId,
+      role: (fRole || undefined) as ModuleRole | undefined,
+      page,
+      size,
+    }),
+    placeholderData: (prev) => prev, // pagination sans clignotement
   });
+
+  // Retour en première page dès qu'un critère change : rester page 12 sur un résultat de 3 pages
+  // afficherait une liste vide.
+  useEffect(() => { setPage(0); }, [ministryId, debouncedSearch, placeNodeId, fRole, size]);
+
   const structureQ = useQuery({
     queryKey: ["ministry-structure", ministryId],
     queryFn: () => fetchMinistryStructure(ministryId),
@@ -77,28 +107,6 @@ export default function UtilisateursPage() {
   const zoneName = useMemo(() => new Map((org?.zones ?? []).map((z) => [z.id, z.name])), [org]);
   const cityName = useMemo(() => new Map((org?.localities ?? []).map((l) => [l.id, l.name])), [org]);
   const countryName = useMemo(() => new Map((org?.countries ?? []).map((c) => [c.id, c.name])), [org]);
-  const userName = useMemo(() => new Map((usersQ.data ?? []).map((u) => [u.id, u.fullName])), [usersQ.data]);
-  // Unité → zone (via localité) pour filtrer « tous les users de la zone ».
-  const unitZone = useMemo(() => {
-    const locZone = new Map((org?.localities ?? []).map((l) => [l.id, l.zoneId]));
-    return new Map((org?.units ?? []).map((u) => [u.id, u.localityId ? locZone.get(u.localityId) ?? null : null]));
-  }, [org]);
-  // Ville → zone, pour que le filtre Zone attrape aussi les dirigeants de ville (multi inclus).
-  const cityZoneMap = useMemo(() => new Map((org?.localities ?? []).map((l) => [l.id, l.zoneId])), [org]);
-  const cityZone = (cityId: string) => cityZoneMap.get(cityId) ?? null;
-  // Zone / localité / unité → pays, pour filtrer « tous les users du pays ».
-  const zoneCountry = useMemo(() => new Map((org?.zones ?? []).map((z) => [z.id, z.countryId])), [org]);
-  const locCountry = useMemo(
-    () => new Map((org?.localities ?? []).map((l) => [l.id, l.zoneId ? zoneCountry.get(l.zoneId) ?? null : null])),
-    [org, zoneCountry],
-  );
-  const unitCountry = useMemo(() => {
-    const locality = new Map((org?.localities ?? []).map((l) => [l.id, l]));
-    return new Map((org?.units ?? []).map((u) => {
-      const loc = u.localityId ? locality.get(u.localityId) : undefined;
-      return [u.id, loc?.zoneId ? zoneCountry.get(loc.zoneId) ?? null : null];
-    }));
-  }, [org, zoneCountry]);
 
   // Union home + set (multi-rattachements), home en tête.
   const unionIds = (home: string | null, set: string[] | undefined): string[] => {
@@ -117,47 +125,22 @@ export default function UtilisateursPage() {
     return "—";
   };
 
-  const usersInZone = (u: AdminUserResponse, zoneId: string) =>
-    u.goalZoneId === zoneId || u.donationZoneId === zoneId ||
-    u.goalZoneIds?.includes(zoneId) ||
-    (u.goalCityId && cityZone(u.goalCityId) === zoneId) ||
-    u.goalCityIds?.some((c) => cityZone(c) === zoneId) ||
-    (u.goalUnitId && unitZone.get(u.goalUnitId) === zoneId) ||
-    (u.donationUnitId && unitZone.get(u.donationUnitId) === zoneId);
+  // Les lignes viennent telles quelles du serveur : plus aucun filtrage en mémoire, sinon la
+  // pagination serait fausse (on retirerait des lignes d'une page déjà découpée par le backend).
+  const rows = useMemo(
+    () => (usersQ.data?.content ?? []).map((u) => ({ ...u, _key: u.id })),
+    [usersQ.data],
+  );
 
-  const usersInCountry = (u: AdminUserResponse, countryId: string) =>
-    u.goalCountryIds?.includes(countryId) || u.donationCountryIds?.includes(countryId) ||
-    u.coordinatedCountryIds?.includes(countryId) ||
-    (u.goalZoneId && zoneCountry.get(u.goalZoneId) === countryId) ||
-    u.goalZoneIds?.some((z) => zoneCountry.get(z) === countryId) ||
-    (u.donationZoneId && zoneCountry.get(u.donationZoneId) === countryId) ||
-    (u.goalCityId && locCountry.get(u.goalCityId) === countryId) ||
-    u.goalCityIds?.some((c) => locCountry.get(c) === countryId) ||
-    (u.donationCityId && locCountry.get(u.donationCityId) === countryId) ||
-    (u.goalUnitId && unitCountry.get(u.goalUnitId) === countryId) ||
-    (u.donationUnitId && unitCountry.get(u.donationUnitId) === countryId) ||
-    u.goalUnitIds?.some((id) => unitCountry.get(id) === countryId) ||
-    u.donationUnitIds?.some((id) => unitCountry.get(id) === countryId);
+  const total = usersQ.data?.totalElements ?? 0;
+  const totalPages = usersQ.data?.totalPages ?? 0;
+  const firstShown = total === 0 ? 0 : page * size + 1;
+  const lastShown = Math.min(total, page * size + rows.length);
 
-  const rows = useMemo(() => {
-    let list = usersQ.data ?? [];
-    if (fCountry) list = list.filter((u) => usersInCountry(u, fCountry));
-    if (fZone) list = list.filter((u) => usersInZone(u, fZone));
-    if (fUnit) list = list.filter((u) => u.goalUnitId === fUnit || u.donationUnitId === fUnit || u.goalUnitIds?.includes(fUnit) || u.donationUnitIds?.includes(fUnit));
-    if (fRole) list = list.filter((u) => u.goalRole === fRole || u.donationRole === fRole);
-    if (search.trim()) {
-      const q = search.trim().toLowerCase();
-      // fullName / email / username peuvent remonter null du backend (compte créé sur l'un des deux
-      // seulement) : jamais de .toLowerCase() direct.
-      list = list.filter((u) => (u.fullName ?? "").toLowerCase().includes(q)
-        || (u.email ?? "").toLowerCase().includes(q)
-        || (u.username ?? "").toLowerCase().includes(q));
-    }
-    return list.map((u) => ({ ...u, _key: u.id }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [usersQ.data, fCountry, fZone, fUnit, fRole, search, unitZone, cityZoneMap, zoneCountry, locCountry, unitCountry]);
-
-  const invalidate = () => qc.invalidateQueries({ queryKey: ["ministry-users", ministryId] });
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["users-page"] });
+    qc.invalidateQueries({ queryKey: ["user-search"] }); // combobox superviseur (recherche serveur)
+  };
 
   const updateM = useMutation({
     // Champs laissés vides = inchangés côté backend (null = « ne touche pas »).
@@ -241,6 +224,10 @@ export default function UtilisateursPage() {
     setRoleEntity(currentEntityFor(u, r));
     setRoleEntities(currentEntitiesFor(u, r));
     setRoleSupervisor(u.supervisorId ?? "");
+    // Le nom du superviseur vient de la ligne (résolu par le backend) : pas de recherche à l'ouverture.
+    setRoleSupervisorRef(u.supervisorId
+      ? { id: u.supervisorId, fullName: u.supervisorFullName ?? "", username: null, email: null }
+      : undefined);
     setRoleUser(u);
   };
 
@@ -264,7 +251,8 @@ export default function UtilisateursPage() {
   // son mot de passe elle-même sur l'écran /invitation/{token}) ----
   const resetCreate = () => {
     setNewName(""); setNewUsername(""); setNewEmail("");
-    setNewRole("DIRIGEANT_SENIOR"); setNewEntity(""); setNewEntities([]); setNewSupervisor("");
+    setNewRole("DIRIGEANT_SENIOR"); setNewEntity(""); setNewEntities([]);
+    setNewSupervisor(""); setNewSupervisorRef(undefined);
   };
 
   const createM = useMutation({
@@ -313,7 +301,15 @@ export default function UtilisateursPage() {
     },
     { label: t("users.colRole"), render: (u: AdminUserResponse) => { const r = u.goalRole ?? u.donationRole; return r ? <Badge tone="earth">{t(`responsables.role.${r}`)}</Badge> : <span style={{ color: "var(--ink-400)" }}>—</span>; } },
     { label: t("users.colAttachment"), render: (u: AdminUserResponse) => <span style={{ color: "var(--ink-500)" }}>{attachmentLabel(u)}</span> },
-    { label: t("users.colSupervisor"), render: (u: AdminUserResponse) => <span style={{ color: "var(--ink-500)" }}>{u.supervisorId ? (userName.get(u.supervisorId) ?? "—") : t("responsables.root")}</span> },
+    { label: t("users.colSupervisor"), render: (u: AdminUserResponse) => <span style={{ color: "var(--ink-500)" }}>{u.supervisorId ? (u.supervisorFullName ?? "—") : t("responsables.root")}</span> },
+    {
+      label: t("users.colRegisteredAt"),
+      render: (u: AdminUserResponse) => (
+        <span style={{ color: "var(--ink-500)" }}>
+          {u.createdAt ? new Date(u.createdAt).toLocaleDateString() : "—"}
+        </span>
+      ),
+    },
     { label: t("users.colStatus"), render: (u: AdminUserResponse) => u.active ? <Badge tone="ok" dot>{t("users.active")}</Badge> : <Badge tone="gray" dot>{t("users.inactive")}</Badge> },
     {
       label: "",
@@ -335,58 +331,82 @@ export default function UtilisateursPage() {
         <div className="card" style={{ padding: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderBottom: "1px solid var(--line,#eee)", flexWrap: "wrap" }}>
             <span style={{ fontWeight: 600 }}>{t("users.workspaceTitle")}</span>
-            <Select value={ministryId} onChange={(e) => { setMinistryId(e.target.value); setFCountry(""); setFZone(""); setFUnit(""); setFRole(""); setSearch(""); }}>
-              <option value="">{t("users.pickMinistry")}</option>
+            {/* Vide = TOUS les ministères : un nouvel inscrit est rattaché au ministère par défaut,
+                le masquer derrière un choix obligatoire le rendait introuvable. */}
+            <Select value={ministryId} onChange={(e) => { setMinistryId(e.target.value); setFCountry(""); setFZone(""); setFUnit(""); }}>
+              <option value="">{t("users.allMinistries")}</option>
               {(ministriesQ.data ?? []).map((m: MinistryResponse) => <option key={m.id} value={m.id}>{m.name}</option>)}
             </Select>
             <div style={{ marginLeft: "auto" }}>
+              {/* La création exige un ministère : la vue « tous les ministères » ne dit pas où créer. */}
               <Button variant="primary" size="sm" disabled={!ministryId}
+                title={!ministryId ? t("users.createNeedsMinistry") : undefined}
                 onClick={() => { resetCreate(); setCreateOpen(true); }}>
                 {t("users.create")}
               </Button>
             </div>
           </div>
 
-          {!ministryId ? (
-            <div style={{ padding: 40, textAlign: "center", color: "var(--ink-500)" }}>{t("users.pickMinistryHint")}</div>
+          <div style={{ display: "flex", gap: 12, padding: "12px 16px", flexWrap: "wrap", borderBottom: "1px solid var(--line,#eee)" }}>
+            <Field label={t("users.search")} hint={searching ? t("users.searchScopeHint") : undefined}>
+              <Input placeholder={t("users.searchPlaceholder")} value={search} onChange={(e) => setSearch(e.target.value)} />
+            </Field>
+            {/* Filtres géographiques : ils ont besoin de la structure d'UN ministère. */}
+            <Field label={t("subscriptions.level.COUNTRY")}>
+              <Select value={fCountry} disabled={!ministryId || searching}
+                onChange={(e) => { setFCountry(e.target.value); setFZone(""); setFUnit(""); }}>
+                <option value="">{t("users.all")}</option>
+                {(org?.countries ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </Select>
+            </Field>
+            <Field label={t("subscriptions.level.ZONE")}>
+              <Select value={fZone} disabled={!ministryId || searching} onChange={(e) => { setFZone(e.target.value); setFUnit(""); }}>
+                <option value="">{t("users.allFem")}</option>
+                {(org?.zones ?? [])
+                  .filter((z) => !fCountry || z.countryId === fCountry)
+                  .map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
+              </Select>
+            </Field>
+            <Field label={t("subscriptions.level.UNIT")}>
+              <Select value={fUnit} disabled={!ministryId || searching} onChange={(e) => setFUnit(e.target.value)}>
+                <option value="">{t("users.allFem")}</option>
+                {(org?.units ?? []).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+              </Select>
+            </Field>
+            <Field label={t("users.colRole")}>
+              <Select value={fRole} onChange={(e) => setFRole(e.target.value)}>
+                <option value="">{t("users.all")}</option>
+                {ROLES.map((r) => <option key={r} value={r}>{t(`responsables.role.${r}`)}</option>)}
+              </Select>
+            </Field>
+          </div>
+
+          {usersQ.isLoading ? (
+            <div style={{ padding: 24, color: "var(--ink-500)" }}>{t("common.loading")}</div>
           ) : (
             <>
-              <div style={{ display: "flex", gap: 12, padding: "12px 16px", flexWrap: "wrap", borderBottom: "1px solid var(--line,#eee)" }}>
-                <Field label={t("subscriptions.level.COUNTRY")}>
-                  <Select value={fCountry} onChange={(e) => { setFCountry(e.target.value); setFZone(""); setFUnit(""); }}>
-                    <option value="">{t("users.all")}</option>
-                    {(org?.countries ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                  </Select>
-                </Field>
-                <Field label={t("subscriptions.level.ZONE")}>
-                  <Select value={fZone} onChange={(e) => setFZone(e.target.value)}>
-                    <option value="">{t("users.allFem")}</option>
-                    {(org?.zones ?? [])
-                      .filter((z) => !fCountry || z.countryId === fCountry)
-                      .map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
-                  </Select>
-                </Field>
-                <Field label={t("subscriptions.level.UNIT")}>
-                  <Select value={fUnit} onChange={(e) => setFUnit(e.target.value)}>
-                    <option value="">{t("users.allFem")}</option>
-                    {(org?.units ?? []).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
-                  </Select>
-                </Field>
-                <Field label={t("users.colRole")}>
-                  <Select value={fRole} onChange={(e) => setFRole(e.target.value)}>
-                    <option value="">{t("users.all")}</option>
-                    {ROLES.map((r) => <option key={r} value={r}>{t(`responsables.role.${r}`)}</option>)}
-                  </Select>
-                </Field>
-                <Field label={t("users.search")}>
-                  <Input placeholder={t("users.searchPlaceholder")} value={search} onChange={(e) => setSearch(e.target.value)} />
-                </Field>
+              <Table columns={cols} rows={rows} zebra />
+              <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderTop: "1px solid var(--line,#eee)", flexWrap: "wrap" }}>
+                <span style={{ color: "var(--ink-500)", fontSize: 13 }}>
+                  {t("users.pageRange", { first: firstShown, last: lastShown, total })}
+                </span>
+                <Select value={String(size)} onChange={(e) => setSize(Number(e.target.value))} style={{ width: "auto" }}>
+                  {PAGE_SIZES.map((n) => <option key={n} value={n}>{t("users.perPage", { count: n })}</option>)}
+                </Select>
+                <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+                  <Button variant="ghost" size="sm" disabled={page === 0 || usersQ.isFetching}
+                    onClick={() => setPage((p) => Math.max(0, p - 1))}>
+                    {t("users.prevPage")}
+                  </Button>
+                  <span style={{ color: "var(--ink-500)", fontSize: 13 }}>
+                    {t("users.pageOf", { page: totalPages === 0 ? 0 : page + 1, pages: totalPages })}
+                  </span>
+                  <Button variant="ghost" size="sm" disabled={page + 1 >= totalPages || usersQ.isFetching}
+                    onClick={() => setPage((p) => p + 1)}>
+                    {t("users.nextPage")}
+                  </Button>
+                </div>
               </div>
-              {usersQ.isLoading ? (
-                <div style={{ padding: 24, color: "var(--ink-500)" }}>{t("common.loading")}</div>
-              ) : (
-                <Table columns={cols} rows={rows} zebra />
-              )}
             </>
           )}
         </div>
@@ -426,7 +446,8 @@ export default function UtilisateursPage() {
               </Select>
             </Field>
           )}
-          <SupervisorSelect users={usersQ.data ?? []} value={newSupervisor} onChange={setNewSupervisor} t={t} />
+          <RemoteSupervisorSelect ministryId={ministryId || undefined} value={newSupervisor} selected={newSupervisorRef}
+            onChange={(id, u) => { setNewSupervisor(id); setNewSupervisorRef(u); }} t={t} />
           <p style={{ margin: 0, fontSize: 12.5, color: "var(--ink-400)" }}>{t("users.createHint")}</p>
         </div>
       </Modal>
@@ -496,7 +517,8 @@ export default function UtilisateursPage() {
               </Select>
             </Field>
           )}
-          <SupervisorSelect users={usersQ.data ?? []} value={roleSupervisor} onChange={setRoleSupervisor} t={t} excludeId={roleUser?.id} />
+          <RemoteSupervisorSelect ministryId={ministryId || undefined} value={roleSupervisor} selected={roleSupervisorRef}
+            onChange={(id, u) => { setRoleSupervisor(id); setRoleSupervisorRef(u); }} t={t} excludeId={roleUser?.id} />
           <p style={{ margin: 0, fontSize: 12.5, color: "var(--ink-400)" }}>{t("users.roleHint")}</p>
         </div>
       </Modal>

@@ -1,15 +1,15 @@
 import { useMemo, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Badge, Button, Drawer, Field, Input, Modal, Select } from "./primitives";
-import { SupervisorSelect, UserCombobox } from "./UserCombobox";
+import { RemoteSupervisorSelect, RemoteUserCombobox, type UserRef } from "./UserCombobox";
 import { Icons } from "./icons";
 import { useToasts } from "@/context/ToastContext";
 import { invitationLink } from "@/services/ministryService";
 import type { NodeLevel, TreeNode } from "@/lib/orgTree";
-import { RESP_ROLES_BY_LEVEL, buildGoalAttachment, isResponsableOf } from "@/lib/responsables";
+import { RESP_ROLES_BY_LEVEL, buildGoalAttachment } from "@/lib/responsables";
 import {
-  deactivateUser, inviteUser, reassignUser, regenerateInvitation, userLogin,
+  deactivateUser, inviteUser, listResponsables, reassignUser, regenerateInvitation, userLogin,
   type AdminUserResponse, type ModuleRole,
 } from "@/services/userService";
 
@@ -30,11 +30,10 @@ type FormState =
   | null;
 
 export function ResponsablesDrawer({
-  node, ministryId, users, org, onClose,
+  node, ministryId, org, onClose,
 }: {
   node: TreeNode | null;
   ministryId: string;
-  users: AdminUserResponse[];
   org?: StructureOrg;
   onClose: () => void;
 }) {
@@ -47,8 +46,12 @@ export function ResponsablesDrawer({
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<ModuleRole | "">("");
   const [supervisorId, setSupervisorId] = useState("");
+  // Le superviseur se choisit par recherche serveur : on garde le compte retenu pour l'afficher.
+  const [supervisorRef, setSupervisorRef] = useState<UserRef | undefined>(undefined);
   // Affectation d'un utilisateur déjà existant (mode "assign").
   const [assignUserId, setAssignUserId] = useState("");
+  /** Compte retenu pour l'affectation : ses rattachements pilotent le mode multi (voir saveM). */
+  const [assignUser, setAssignUser] = useState<AdminUserResponse | undefined>(undefined);
   // Édition = réaffectation : niveau + entité cibles.
   const [editLevel, setEditLevel] = useState<NodeLevel>("ZONE");
   const [editEntity, setEditEntity] = useState("");
@@ -57,11 +60,14 @@ export function ResponsablesDrawer({
 
   const addRoleOptions = node ? RESP_ROLES_BY_LEVEL[node.level] : [];
   const editRoleOptions = RESP_ROLES_BY_LEVEL[editLevel];
-  const responsables = useMemo(
-    () => (node ? users.filter((u) => isResponsableOf(u, node.level, node.id)) : []),
-    [users, node],
-  );
-  const nameById = useMemo(() => new Map(users.map((u) => [u.id, u.fullName])), [users]);
+
+  // Responsables du nœud : la règle est portée par le serveur (l'annuaire complet n'est plus chargé).
+  const responsablesQ = useQuery({
+    queryKey: ["responsables", node?.id ?? "", node?.level ?? ""],
+    queryFn: () => listResponsables(node!.id, node!.level),
+    enabled: !!node,
+  });
+  const responsables = responsablesQ.data ?? [];
 
   const entityOptions = useMemo(() => {
     if (editLevel === "UNIT") return org?.units ?? [];
@@ -71,27 +77,40 @@ export function ResponsablesDrawer({
     return [];
   }, [editLevel, org]);
 
-  // Candidats à l'affectation : tout utilisateur qui n'est pas déjà responsable de ce nœud.
-  const assignCandidates = useMemo(
-    () => (node ? users.filter((u) => !isResponsableOf(u, node.level, node.id)) : []),
-    [users, node],
-  );
+  // Déjà responsables de ce nœud : retirés des résultats de recherche à l'affectation.
+  const responsableIds = useMemo(() => responsables.map((u) => u.id), [responsables]);
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: ["ministry-users", ministryId] });
-  const closeForm = () => { setForm(null); setFullName(""); setEmail(""); setRole(""); setSupervisorId(""); setEditEntity(""); setAssignUserId(""); };
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["responsables"] });
+    qc.invalidateQueries({ queryKey: ["responsable-counts", ministryId] });
+    qc.invalidateQueries({ queryKey: ["users-page"] });   // page Utilisateurs
+    qc.invalidateQueries({ queryKey: ["user-search"] });  // combobox à recherche serveur
+  };
+  const closeForm = () => {
+    setForm(null); setFullName(""); setEmail(""); setRole(""); setEditEntity("");
+    setSupervisorId(""); setSupervisorRef(undefined); setAssignUserId(""); setAssignUser(undefined);
+  };
+
+  /** Superviseur d'un compte, affichable sans recherche : son nom est résolu par le backend. */
+  const supervisorRefOf = (u: AdminUserResponse): UserRef | undefined =>
+    u.supervisorId ? { id: u.supervisorId, fullName: u.supervisorFullName ?? "", username: null, email: null } : undefined;
 
   const openAdd = () => {
-    setFullName(""); setEmail(""); setRole(addRoleOptions[0] ?? ""); setSupervisorId("");
+    setFullName(""); setEmail(""); setRole(addRoleOptions[0] ?? "");
+    setSupervisorId(""); setSupervisorRef(undefined);
     setForm({ mode: "add" });
   };
   const openAssign = () => {
-    setAssignUserId(""); setRole(addRoleOptions[0] ?? ""); setSupervisorId("");
+    setAssignUserId(""); setAssignUser(undefined); setRole(addRoleOptions[0] ?? "");
+    setSupervisorId(""); setSupervisorRef(undefined);
     setForm({ mode: "assign" });
   };
   // À la sélection de l'utilisateur, on préremplit son superviseur actuel.
-  const pickAssignUser = (id: string) => {
+  const pickAssignUser = (id: string, picked?: AdminUserResponse) => {
     setAssignUserId(id);
-    setSupervisorId(users.find((u) => u.id === id)?.supervisorId ?? "");
+    setAssignUser(picked);
+    setSupervisorId(picked?.supervisorId ?? "");
+    setSupervisorRef(picked ? supervisorRefOf(picked) : undefined);
   };
   const openEdit = (u: AdminUserResponse) => {
     if (!node) return;
@@ -100,6 +119,7 @@ export function ResponsablesDrawer({
     setEditEntity(node.level === "MINISTRY" ? "" : node.id);
     setRole((u.goalRole ?? u.donationRole ?? RESP_ROLES_BY_LEVEL[node.level][0] ?? "") as ModuleRole | "");
     setSupervisorId(u.supervisorId ?? "");
+    setSupervisorRef(supervisorRefOf(u));
     setForm({ mode: "edit", user: u });
   };
 
@@ -123,7 +143,7 @@ export function ResponsablesDrawer({
         if (!node || !assignUserId) return;
         // Multi-rattachements : si la personne a DÉJÀ ce rôle au même niveau (DIRIGEANT/ville,
         // SENIOR/région), le nœud s'AJOUTE à ses rattachements ; sinon remplacement en bloc.
-        const target = users.find((u) => u.id === assignUserId);
+        const target = assignUser;
         const existing =
           node.level === "LOCALITY" && role === "DIRIGEANT" && target?.goalRole === "DIRIGEANT"
             ? (target.goalCityIds?.length ? target.goalCityIds : (target.goalCityId ? [target.goalCityId] : []))
@@ -211,7 +231,7 @@ export function ResponsablesDrawer({
                       </div>
                       <div style={{ fontSize: 13, color: "var(--ink-500)" }}>{userLogin(u)}</div>
                       <div style={{ fontSize: 13, color: "var(--ink-500)" }}>
-                        {t("responsables.supervisor")} : {u.supervisorId ? (nameById.get(u.supervisorId) ?? "—") : t("responsables.root")}
+                        {t("responsables.supervisor")} : {u.supervisorId ? (u.supervisorFullName ?? "—") : t("responsables.root")}
                       </div>
                       {invites[u.id] && (
                         <div style={{ background: "var(--parchment, #faf7f0)", border: "1px solid var(--line,#eee)", borderRadius: 8, padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
@@ -270,16 +290,19 @@ export function ResponsablesDrawer({
                 {addRoleOptions.map((r) => <option key={r} value={r}>{t(`responsables.role.${r}`)}</option>)}
               </Select>
             </Field>
-            <SupervisorSelect users={users} value={supervisorId} onChange={setSupervisorId} t={t} />
+            <RemoteSupervisorSelect ministryId={ministryId} value={supervisorId} selected={supervisorRef}
+              onChange={(id, u) => { setSupervisorId(id); setSupervisorRef(u); }} t={t} />
           </div>
         )}
 
         {form?.mode === "assign" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <p style={{ margin: 0, color: "var(--ink-500)", fontSize: 13 }}>{t("responsables.assignHint")}</p>
-            <UserCombobox
-              users={assignCandidates}
+            <RemoteUserCombobox
+              ministryId={ministryId}
               value={assignUserId}
+              selected={assignUser}
+              excludeIds={responsableIds}
               onChange={pickAssignUser}
               t={t}
               label={t("responsables.assignUserLabel")}
@@ -289,7 +312,9 @@ export function ResponsablesDrawer({
                 {addRoleOptions.map((r) => <option key={r} value={r}>{t(`responsables.role.${r}`)}</option>)}
               </Select>
             </Field>
-            <SupervisorSelect users={users} value={supervisorId} onChange={setSupervisorId} t={t} excludeId={assignUserId || undefined} />
+            <RemoteSupervisorSelect ministryId={ministryId} value={supervisorId} selected={supervisorRef}
+              onChange={(id, u) => { setSupervisorId(id); setSupervisorRef(u); }} t={t}
+              excludeId={assignUserId || undefined} />
           </div>
         )}
 
@@ -314,7 +339,8 @@ export function ResponsablesDrawer({
                 {editRoleOptions.map((r) => <option key={r} value={r}>{t(`responsables.role.${r}`)}</option>)}
               </Select>
             </Field>
-            <SupervisorSelect users={users} value={supervisorId} onChange={setSupervisorId} t={t} excludeId={form.user.id} />
+            <RemoteSupervisorSelect ministryId={ministryId} value={supervisorId} selected={supervisorRef}
+              onChange={(id, u) => { setSupervisorId(id); setSupervisorRef(u); }} t={t} excludeId={form.user.id} />
           </div>
         )}
       </Modal>

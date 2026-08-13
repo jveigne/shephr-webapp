@@ -15,6 +15,8 @@ export interface AdminUserResponse {
   superAdmin: boolean;
   ministryId: string | null;
   supervisorId: string | null;
+  /** Nom du superviseur, résolu par le backend : la liste est paginée, l'annuaire n'est plus en mémoire. */
+  supervisorFullName: string | null;
   donationRole: ModuleRole | null;
   donationUnitId: string | null;
   donationZoneId: string | null;
@@ -38,6 +40,16 @@ export interface AdminUserResponse {
 
 interface PageResponse<T> { content: T[]; totalElements: number; }
 
+/** Page renvoyée par Spring Data (champs utiles à la pagination du back-office). */
+export interface UserPage {
+  content: AdminUserResponse[];
+  totalElements: number;
+  totalPages: number;
+  /** Index de la page courante, base 0. */
+  number: number;
+  size: number;
+}
+
 /**
  * Libellé d'identification d'un compte. L'identifiant de connexion prime sur l'email : les comptes
  * Shephr sont créés sur `username` et n'ont souvent PAS d'email — afficher `email` seul laisse une
@@ -45,6 +57,27 @@ interface PageResponse<T> { content: T[]; totalElements: number; }
  */
 export function userLogin(u: Pick<AdminUserResponse, "username" | "email">): string {
   return u.username ?? u.email ?? "—";
+}
+
+/** Niveaux de l'arbre organisationnel, tels que le backend les nomme (identiques à `NodeLevel`). */
+export type ResponsableLevel = "MINISTRY" | "COUNTRY" | "ZONE" | "LOCALITY" | "UNIT";
+
+/**
+ * Responsables rattachés EXACTEMENT à ce nœud. La règle vit côté serveur : le back-office ne
+ * charge plus l'annuaire complet, il ne peut donc plus la calculer lui-même.
+ */
+export function listResponsables(nodeId: string, level: ResponsableLevel): Promise<AdminUserResponse[]> {
+  return apiFetch<AdminUserResponse[]>(
+    `/api/church/admin/users/responsables?nodeId=${nodeId}&level=${level}`,
+  );
+}
+
+/** Nombre de responsables par nœud, pour tout l'arbre d'un ministère (compteurs page Structure). */
+export async function fetchResponsableCounts(ministryId: string): Promise<Map<string, number>> {
+  const rows = await apiFetch<Array<{ nodeId: string; count: number }>>(
+    `/api/church/admin/users/responsable-counts?ministryId=${ministryId}`,
+  );
+  return new Map(rows.map((r) => [r.nodeId, r.count]));
 }
 
 export interface InviteUserRequest {
@@ -92,6 +125,38 @@ export async function listMinistryUsers(ministryId: string): Promise<AdminUserRe
     `/api/church/admin/users?ministryId=${ministryId}&size=500`,
   );
   return data.content;
+}
+
+export interface UserQuery {
+  /** Vide = tous les ministères (le backend restreint de lui-même un acteur non SUPER_ADMIN). */
+  ministryId?: string;
+  /** Nom (approché), identifiant de connexion ou email. Exclusif du filtre géographique. */
+  search?: string;
+  /** Nation, région, ville ou assemblée : le backend prend tout le sous-arbre du nœud. */
+  placeNodeId?: string;
+  /** Rôle Objectifs OU Dons. */
+  role?: ModuleRole | "";
+  active?: boolean;
+  /** Base 0. */
+  page?: number;
+  size?: number;
+}
+
+/**
+ * Liste paginée et filtrée CÔTÉ SERVEUR. C'est le seul chemin viable au-delà de quelques centaines
+ * de comptes : charger tout l'annuaire pour filtrer dans le navigateur laisse invisibles tous les
+ * inscrits au-delà de la page chargée. Tri par défaut du backend : derniers inscrits en tête.
+ */
+export function searchUsers(q: UserQuery): Promise<UserPage> {
+  const p = new URLSearchParams();
+  if (q.ministryId) p.set("ministryId", q.ministryId);
+  if (q.search?.trim()) p.set("search", q.search.trim());
+  if (q.placeNodeId) p.set("placeNodeId", q.placeNodeId);
+  if (q.role) p.set("role", q.role);
+  if (q.active !== undefined) p.set("active", String(q.active));
+  p.set("page", String(q.page ?? 0));
+  p.set("size", String(q.size ?? 25));
+  return apiFetch<UserPage>(`/api/church/admin/users?${p.toString()}`);
 }
 
 export function inviteUser(body: InviteUserRequest): Promise<InviteUserResponse> {
