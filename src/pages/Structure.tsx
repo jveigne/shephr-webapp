@@ -6,10 +6,10 @@ import { Badge, Button, Field, IconButton, Input, Modal, Select, TopBar } from "
 import { useToasts } from "@/context/ToastContext";
 import { buildTree, byNameFr, type NodeLevel, type TreeNode } from "@/lib/orgTree";
 import { COUNTRIES_FR_SORTED } from "@/lib/countries";
-import { canHaveResponsables, isResponsableOf } from "@/lib/responsables";
+import { canHaveResponsables } from "@/lib/responsables";
 import { ResponsablesDrawer } from "@/components/ResponsablesDrawer";
 import { listMinistries, type MinistryResponse } from "@/services/ministryService";
-import { listMinistryUsers, type AdminUserResponse } from "@/services/userService";
+import { fetchResponsableCounts } from "@/services/userService";
 import {
   createCountry, createLocality, createUnit, createZone,
   deleteCountry, deleteLocality, deleteUnit, deleteZone,
@@ -17,6 +17,9 @@ import {
   updateCountry, updateLocality, updateNodeRegionLabel, updateUnit, updateZone,
   type RegionLabel,
 } from "@/services/orgService";
+
+/** Compteurs absents (chargement) : constante partagée, pour ne pas re-rendre l'arbre à vide. */
+const NO_COUNTS: Map<string, number> = new Map();
 
 // Chantier B : arbre 4 niveaux Nation → Région/État → Ville → Assemblée (plus de Team).
 const CHILD: Partial<Record<NodeLevel, NodeLevel>> = {
@@ -60,9 +63,11 @@ export default function StructurePage() {
     queryFn: () => fetchMinistryStructure(ministryId),
     enabled: !!ministryId,
   });
-  const usersQ = useQuery({
-    queryKey: ["ministry-users", ministryId],
-    queryFn: () => listMinistryUsers(ministryId),
+  // Compteur de responsables par nœud, calculé CÔTÉ SERVEUR : une seule requête pour tout l'arbre.
+  // Le compter dans le navigateur imposait de charger l'annuaire entier — faux dès le 501ᵉ compte.
+  const countsQ = useQuery({
+    queryKey: ["responsable-counts", ministryId],
+    queryFn: () => fetchResponsableCounts(ministryId),
     enabled: !!ministryId,
   });
   // Chantier B : libellé Région/État par nation (porté par le nœud NATION, même id que le pays).
@@ -72,7 +77,7 @@ export default function StructurePage() {
     for (const n of nationsQ.data ?? []) m.set(n.id, n.regionLabel ?? "REGION");
     return m;
   }, [nationsQ.data]);
-  const users: AdminUserResponse[] = usersQ.data ?? [];
+  const respCounts = countsQ.data ?? NO_COUNTS;
 
   const ministries = useMemo(() => [...(ministriesQ.data ?? [])].sort(byNameFr), [ministriesQ.data]);
   const continents = useMemo(() => [...(continentsQ.data ?? [])].sort(byNameFr), [continentsQ.data]);
@@ -216,7 +221,7 @@ export default function StructurePage() {
             <div style={{ padding: 24, color: "var(--ink-500)" }}>{t("structure.loading")}</div>
           ) : tree ? (
             <div style={{ padding: "8px 4px" }}>
-              <StructureRow node={tree} depth={0} users={users} onAdd={openAdd} onEdit={openEdit} onDelete={setDeleting} onResponsables={setResponsablesNode} t={t} />
+              <StructureRow node={tree} depth={0} counts={respCounts} onAdd={openAdd} onEdit={openEdit} onDelete={setDeleting} onResponsables={setResponsablesNode} t={t} />
             </div>
           ) : null}
         </div>
@@ -225,7 +230,6 @@ export default function StructurePage() {
       <ResponsablesDrawer
         node={responsablesNode}
         ministryId={ministryId}
-        users={users}
         org={structureQ.data ? { countries: structureQ.data.countries, zones: structureQ.data.zones, localities: structureQ.data.localities, units: structureQ.data.units } : undefined}
         onClose={() => setResponsablesNode(null)}
       />
@@ -330,11 +334,12 @@ export default function StructurePage() {
 }
 
 function StructureRow({
-  node, depth, users, onAdd, onEdit, onDelete, onResponsables, t,
+  node, depth, counts, onAdd, onEdit, onDelete, onResponsables, t,
 }: {
   node: TreeNode;
   depth: number;
-  users: AdminUserResponse[];
+  /** Nombre de responsables par id de nœud (calculé côté serveur). */
+  counts: Map<string, number>;
   onAdd: (n: TreeNode) => void;
   onEdit: (n: TreeNode) => void;
   onDelete: (n: TreeNode) => void;
@@ -345,9 +350,7 @@ function StructureRow({
   const hasChildren = node.children.length > 0;
   const canAddChild = !!CHILD[node.level];
   const isMinistry = node.level === "MINISTRY";
-  const respCount = canHaveResponsables(node.level)
-    ? users.filter((u) => isResponsableOf(u, node.level, node.id)).length
-    : 0;
+  const respCount = canHaveResponsables(node.level) ? (counts.get(node.id) ?? 0) : 0;
   return (
     <div>
       <div className="tree-row" style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 8px", paddingLeft: 8 + depth * 18, borderRadius: 8 }}>
@@ -380,7 +383,7 @@ function StructureRow({
         )}
       </div>
       {open && hasChildren && node.children.map((c) => (
-        <StructureRow key={c.id} node={c} depth={depth + 1} users={users} onAdd={onAdd} onEdit={onEdit} onDelete={onDelete} onResponsables={onResponsables} t={t} />
+        <StructureRow key={c.id} node={c} depth={depth + 1} counts={counts} onAdd={onAdd} onEdit={onEdit} onDelete={onDelete} onResponsables={onResponsables} t={t} />
       ))}
     </div>
   );

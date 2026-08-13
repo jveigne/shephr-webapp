@@ -1,5 +1,5 @@
 import type { NodeLevel } from "./orgTree";
-import type { AdminUserResponse, ModuleRole } from "@/services/userService";
+import type { ModuleRole } from "@/services/userService";
 
 // Rôle naturel par niveau (Chantier B, décision #7) : COORDINATEUR=Nation · SENIOR=Région/État ·
 // DIRIGEANT=Ville (ex-team leader) · DIRIGEANT_UNITE=Assemblée de maison.
@@ -15,24 +15,10 @@ export function canHaveResponsables(level: NodeLevel): boolean {
   return RESP_ROLES_BY_LEVEL[level].length > 0;
 }
 
-/** Un user est « responsable » d'un nœud si son rattachement (Goals ou Dons) pointe vers ce nœud. */
-export function isResponsableOf(u: AdminUserResponse, level: NodeLevel, nodeId: string): boolean {
-  const has = (arr: string[] | undefined, id: string) => (arr ?? []).includes(id);
-  switch (level) {
-    case "UNIT":
-      return u.goalUnitId === nodeId || has(u.goalUnitIds, nodeId) || u.donationUnitId === nodeId || has(u.donationUnitIds, nodeId);
-    case "LOCALITY":
-      return u.goalCityId === nodeId || u.donationCityId === nodeId || has(u.goalCityIds, nodeId);
-    case "ZONE":
-      return u.goalZoneId === nodeId || u.donationZoneId === nodeId || has(u.goalZoneIds, nodeId);
-    case "COUNTRY":
-      return has(u.goalCountryIds, nodeId) || has(u.donationCountryIds, nodeId) || has(u.coordinatedCountryIds, nodeId);
-    case "MINISTRY":
-      return ["LEADER", "SECRETARIAT"].includes(u.goalRole ?? "") || ["LEADER", "SECRETARIAT"].includes(u.donationRole ?? "");
-    default:
-      return false;
-  }
-}
+// La règle « responsable d'un nœud » (rattachement Objectifs OU Dons, home ou multiple) vit
+// désormais CÔTÉ SERVEUR — endpoints /api/church/admin/users/responsables et /responsable-counts.
+// Elle ne peut plus être évaluée ici : le back-office ne charge plus l'annuaire complet, et une
+// seconde copie de la règle dériverait de la première.
 
 /** Rattachement Goals dérivé du nœud + rôle (les autres modules ne sont pas touchés). */
 export function buildGoalAttachment(level: NodeLevel, nodeId: string, role: ModuleRole) {
