@@ -162,3 +162,53 @@ export function listNationNodes(): Promise<OrgNodeRow[]> {
 export function updateNodeRegionLabel(nodeId: string, regionLabel: RegionLabel): Promise<OrgNodeRow> {
   return apiFetch<OrgNodeRow>(`/api/org/admin/nodes/${nodeId}`, { method: "PATCH", body: JSON.stringify({ regionLabel }) });
 }
+
+// ---- Historique des créations d'assemblées (palier C4) ----
+
+/** Rôles par module — mêmes valeurs que `userService.ModuleRole` (dupliqué ici pour ne pas coupler les deux services). */
+export type AssemblyCreatorRole =
+  | "MEMBRE" | "DIRIGEANT_UNITE" | "DIRIGEANT" | "DIRIGEANT_SENIOR"
+  | "DIRIGEANT_COORDINATEUR" | "LEADER" | "SECRETARIAT";
+
+// Mirrors com.excellence.back.org.admin.unit.dto.AssemblyCreationResponse
+export interface AssemblyCreationRow {
+  unitId: string;
+  name: string;
+  cityName: string | null;
+  regionName: string | null;
+  nationName: string | null;
+  /** Instant ISO. */
+  createdAt: string;
+  createdById: string | null;
+  /** JP 14/08 (palier C4) : null pour les assemblées créées AVANT la migration org/18 — afficher « — ». */
+  createdByName: string | null;
+  createdByRole: AssemblyCreatorRole | null;
+}
+
+/** Page renvoyée par Spring Data (mêmes champs que `UserPage`, cf. userService). */
+export interface AssemblyCreationPage {
+  content: AssemblyCreationRow[];
+  totalElements: number;
+  totalPages: number;
+  /** Index de la page courante, base 0. */
+  number: number;
+  first: boolean;
+  last: boolean;
+}
+
+/**
+ * Historique des créations d'assemblées, plus récentes d'abord (tri porté par le backend).
+ *
+ * <p>`ministryId` facultatif : sans lui le SUPER_ADMIN voit tous les ministères. La garde serveur
+ * (SUPER_ADMIN ou SECRETARIAT sur son seul ministère) reste la seule autorité — le filtre d'écran
+ * n'est qu'un confort de lecture.
+ */
+export function listAssemblyHistory(params: {
+  ministryId?: string; page?: number; size?: number;
+}): Promise<AssemblyCreationPage> {
+  const p = new URLSearchParams();
+  if (params.ministryId) p.set("ministryId", params.ministryId);
+  p.set("page", String(params.page ?? 0));
+  p.set("size", String(params.size ?? 25));
+  return apiFetch<AssemblyCreationPage>(`/api/org/admin/units/history?${p.toString()}`);
+}

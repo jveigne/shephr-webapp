@@ -1,16 +1,28 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Badge, Input, Select, Table, TopBar } from "@/components/primitives";
+import { Badge, Input, Pagination, Select, Table, TopBar } from "@/components/primitives";
 import { getDashboard, listAuditLogs, type AuditLogResponse } from "@/services/auditService";
+import { listAssemblyHistory, type AssemblyCreationRow } from "@/services/orgService";
+import { listMinistries, type MinistryResponse } from "@/services/ministryService";
 
 const ACTIONS = ["", "SUBSCRIPTION_CREATED", "SUBSCRIPTION_SUSPENDED", "MODULE_UPDATED"];
+
+/** Palier C4 : 25 lignes par page, comme la liste des comptes — une page qui tient à l'écran. */
+const HISTORY_PAGE_SIZE = 25;
 
 function fmtDateTime(iso: string, locale: string): string {
   const d = new Date(iso);
   return Number.isNaN(d.getTime())
     ? "—"
     : d.toLocaleString(locale, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function fmtDate(iso: string, locale: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? "—"
+    : d.toLocaleDateString(locale, { day: "numeric", month: "short", year: "numeric" });
 }
 
 function Stat({ label, value }: { label: string; value: number }) {
@@ -27,6 +39,9 @@ export default function AuditPage() {
   const dateLocale = (i18n.resolvedLanguage || i18n.language) === "en" ? "en-GB" : "fr-FR";
   const [action, setAction] = useState("");
   const [actorEmail, setActorEmail] = useState("");
+  // Historique des créations d'assemblées (palier C4) : filtre ministère + pagination serveur.
+  const [histMinistryId, setHistMinistryId] = useState("");
+  const [histPage, setHistPage] = useState(0);
 
   const actionLabel = (a: string) => i18n.exists(`audit.actions.${a}`) ? t(`audit.actions.${a}`) : a;
 
@@ -43,6 +58,48 @@ export default function AuditPage() {
     { label: t("audit.colEntity"), render: (r: AuditLogResponse) => <span style={{ color: "var(--ink-600)" }}>{r.entityType ?? "—"}</span> },
     { label: t("audit.colDetail"), render: (r: AuditLogResponse) => <span style={{ color: "var(--ink-700)" }}>{r.summary ?? "—"}</span> },
   ];
+
+  const ministriesQ = useQuery({ queryKey: ["ministries"], queryFn: listMinistries });
+
+  const historyQ = useQuery({
+    queryKey: ["assembly-history", histMinistryId, histPage],
+    queryFn: () => listAssemblyHistory({
+      ministryId: histMinistryId || undefined,
+      page: histPage,
+      size: HISTORY_PAGE_SIZE,
+    }),
+    placeholderData: (prev) => prev, // pagination sans clignotement
+  });
+
+  // Retour en première page au changement de ministère : rester page 4 sur un résultat d'une page
+  // afficherait une liste vide.
+  useEffect(() => { setHistPage(0); }, [histMinistryId]);
+
+  const histCols = [
+    { label: t("audit.colAssembly"), render: (r: AssemblyCreationRow) => <span style={{ fontWeight: 500 }}>{r.name}</span> },
+    { label: t("audit.colCity"), render: (r: AssemblyCreationRow) => <span style={{ color: "var(--ink-600)" }}>{r.cityName ?? "—"}</span> },
+    { label: t("audit.colRegion"), render: (r: AssemblyCreationRow) => <span style={{ color: "var(--ink-600)" }}>{r.regionName ?? "—"}</span> },
+    { label: t("audit.colNation"), render: (r: AssemblyCreationRow) => <span style={{ color: "var(--ink-600)" }}>{r.nationName ?? "—"}</span> },
+    {
+      label: t("audit.colCreatedBy"),
+      // createdByName null = assemblée créée avant la migration org/18 : l'auteur n'a pas été tracé.
+      render: (r: AssemblyCreationRow) => (
+        r.createdByName
+          ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span>{r.createdByName}</span>
+              {r.createdByRole && <Badge tone="earth">{t(`responsables.role.${r.createdByRole}`)}</Badge>}
+            </div>
+          )
+          : <span style={{ color: "var(--ink-400)" }}>—</span>
+      ),
+    },
+    { label: t("audit.colDate"), render: (r: AssemblyCreationRow) => <span style={{ color: "var(--ink-500)" }}>{fmtDate(r.createdAt, dateLocale)}</span> },
+  ];
+
+  const histRows = (historyQ.data?.content ?? []).map((r) => ({ ...r, _key: r.unitId }));
+  const histTotal = historyQ.data?.totalElements ?? 0;
+  const histPageCount = historyQ.data?.totalPages ?? 0;
 
   const rows = logsQ.data ?? [];
   const d = dashQ.data;
@@ -73,6 +130,39 @@ export default function AuditPage() {
             <div style={{ padding: 24, color: "var(--ink-500)" }}>{t("audit.empty")}</div>
           ) : (
             <Table columns={cols} rows={rows.map((r) => ({ ...r, _key: r.id }))} zebra />
+          )}
+        </div>
+
+        {/* Palier C4 — historique des créations d'assemblées, section distincte du journal d'audit :
+            ce ne sont pas des actions sensibles de plateforme mais un suivi de terrain. */}
+        <div className="card" style={{ padding: 0, marginTop: 18 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderBottom: "1px solid var(--line,#eee)", flexWrap: "wrap" }}>
+            <span style={{ fontWeight: 600 }}>{t("audit.assemblyHistoryTitle")}</span>
+            {/* Vide = TOUS les ministères ; le backend restreint de lui-même un acteur non SUPER_ADMIN. */}
+            <Select value={histMinistryId} onChange={(e) => setHistMinistryId(e.target.value)}>
+              <option value="">{t("audit.allMinistries")}</option>
+              {(ministriesQ.data ?? []).map((m: MinistryResponse) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </Select>
+          </div>
+          {historyQ.isLoading ? (
+            <div style={{ padding: 24, color: "var(--ink-500)" }}>{t("common.loading")}</div>
+          ) : historyQ.isError ? (
+            <div style={{ padding: 24, color: "var(--ink-500)" }}>
+              {historyQ.error instanceof Error ? historyQ.error.message : t("common.error")}
+            </div>
+          ) : histRows.length === 0 ? (
+            <div style={{ padding: 24, color: "var(--ink-500)" }}>{t("audit.assemblyHistoryEmpty")}</div>
+          ) : (
+            <>
+              <Table columns={histCols} rows={histRows} zebra />
+              <Pagination
+                page={histPage + 1}
+                pageCount={histPageCount}
+                total={histTotal}
+                perPage={HISTORY_PAGE_SIZE}
+                onPage={(p) => setHistPage(p - 1)}
+              />
+            </>
           )}
         </div>
       </div>
