@@ -7,7 +7,8 @@ import { Icons } from "./icons";
 import { useToasts } from "@/context/ToastContext";
 import { invitationLink } from "@/services/ministryService";
 import type { NodeLevel, TreeNode } from "@/lib/orgTree";
-import { RESP_ROLES_BY_LEVEL, buildGoalAttachment } from "@/lib/responsables";
+import { RESP_ROLES_BY_LEVEL, buildGoalAttachment, isMultiAttachmentRole } from "@/lib/responsables";
+import { EntityMultiPicker } from "./EntityMultiPicker";
 import {
   deactivateUser, inviteUser, listResponsables, reassignUser, regenerateInvitation, userLogin,
   type AdminUserResponse, type ModuleRole,
@@ -55,6 +56,8 @@ export function ResponsablesDrawer({
   // Édition = réaffectation : niveau + entité cibles.
   const [editLevel, setEditLevel] = useState<NodeLevel>("ZONE");
   const [editEntity, setEditEntity] = useState("");
+  /** Palier A2 — cibles multiples pour les rôles à SET (assemblées / villes / régions), ★ = principale. */
+  const [editEntities, setEditEntities] = useState<string[]>([]);
   // Codes d'invitation conservés sur les cartes (le backend ne les réexpose pas après coup).
   const [invites, setInvites] = useState<Record<string, { code: string | null; token: string }>>({});
 
@@ -87,8 +90,20 @@ export function ResponsablesDrawer({
     qc.invalidateQueries({ queryKey: ["user-search"] });  // combobox à recherche serveur
   };
   const closeForm = () => {
-    setForm(null); setFullName(""); setEmail(""); setRole(""); setEditEntity("");
+    setForm(null); setFullName(""); setEmail(""); setRole(""); setEditEntity(""); setEditEntities([]);
     setSupervisorId(""); setSupervisorRef(undefined); setAssignUserId(""); setAssignUser(undefined);
+  };
+
+  /**
+   * Rattachements que la personne porte DÉJÀ au niveau visé (home en tête) : ils préremplissent la
+   * multi-sélection, sans quoi une réaffectation depuis un nœud amputerait silencieusement le
+   * périmètre d'un dirigeant multi-assemblées / multi-villes.
+   */
+  const currentEntitiesAt = (u: AdminUserResponse, lvl: NodeLevel): string[] => {
+    const home = lvl === "UNIT" ? u.goalUnitId : lvl === "LOCALITY" ? u.goalCityId : lvl === "ZONE" ? u.goalZoneId : null;
+    const set = lvl === "UNIT" ? u.goalUnitIds : lvl === "LOCALITY" ? u.goalCityIds : lvl === "ZONE" ? u.goalZoneIds : [];
+    const rest = (set ?? []).filter((id) => id !== home);
+    return home ? [home, ...rest] : rest;
   };
 
   /** Superviseur d'un compte, affichable sans recherche : son nom est résolu par le backend. */
@@ -117,6 +132,10 @@ export function ResponsablesDrawer({
     setFullName(u.fullName); setEmail(u.email ?? "");
     setEditLevel(node.level);
     setEditEntity(node.level === "MINISTRY" ? "" : node.id);
+    // Le nœud d'où l'on ouvre reste la cible principale ; ses autres rattachements le suivent.
+    setEditEntities(node.level === "MINISTRY"
+      ? []
+      : [node.id, ...currentEntitiesAt(u, node.level).filter((id) => id !== node.id)]);
     setRole((u.goalRole ?? u.donationRole ?? RESP_ROLES_BY_LEVEL[node.level][0] ?? "") as ModuleRole | "");
     setSupervisorId(u.supervisorId ?? "");
     setSupervisorRef(supervisorRefOf(u));
@@ -126,8 +145,12 @@ export function ResponsablesDrawer({
   const changeEditLevel = (lvl: NodeLevel) => {
     setEditLevel(lvl);
     setEditEntity("");
+    setEditEntities([]);
     setRole(RESP_ROLES_BY_LEVEL[lvl][0] ?? "");
   };
+
+  /** Réaffectation multi-cibles : uniquement pour les rôles à SET, et hors niveau MINISTRY. */
+  const editMulti = !!role && editLevel !== "MINISTRY" && isMultiAttachmentRole(role as ModuleRole);
 
   const saveM = useMutation({
     mutationFn: async () => {
@@ -149,6 +172,10 @@ export function ResponsablesDrawer({
             ? (target.goalCityIds?.length ? target.goalCityIds : (target.goalCityId ? [target.goalCityId] : []))
           : node.level === "ZONE" && role === "DIRIGEANT_SENIOR" && target?.goalRole === "DIRIGEANT_SENIOR"
             ? (target.goalZoneIds?.length ? target.goalZoneIds : (target.goalZoneId ? [target.goalZoneId] : []))
+          // Palier A2 : affecter un dirigeant d'unité à une 2ᵉ assemblée l'AJOUTE à son
+          // périmètre au lieu de le déplacer. Volontairement exclu pour MEMBRE (mono-assemblée).
+          : node.level === "UNIT" && role === "DIRIGEANT_UNITE" && target?.goalRole === "DIRIGEANT_UNITE"
+            ? (target.goalUnitIds?.length ? target.goalUnitIds : (target.goalUnitId ? [target.goalUnitId] : []))
           : [];
         const entityIds = node.level === "MINISTRY" ? [] : [...existing.filter((id) => id !== node.id), node.id];
         return reassignUser(assignUserId, {
@@ -160,7 +187,8 @@ export function ResponsablesDrawer({
       }
       return reassignUser(form.user.id, {
         goalRole: role,
-        entityId: editLevel === "MINISTRY" ? null : (editEntity || null),
+        entityId: editLevel === "MINISTRY" ? null : ((editMulti ? editEntities[0] : editEntity) || null),
+        entityIds: editMulti ? editEntities : undefined,
         supervisorId: supervisorId || null,
       });
     },
@@ -195,7 +223,7 @@ export function ResponsablesDrawer({
   const valid =
     form?.mode === "add" ? (!!role && fullName.trim() !== "" && /.+@.+\..+/.test(email))
     : form?.mode === "assign" ? (!!role && !!assignUserId)
-    : (!!role && (editLevel === "MINISTRY" || !!editEntity));
+    : (!!role && (editLevel === "MINISTRY" || (editMulti ? editEntities.length > 0 : !!editEntity)));
 
   return (
     <>
@@ -326,14 +354,19 @@ export function ResponsablesDrawer({
                 {LEVELS.map((lvl) => <option key={lvl} value={lvl}>{t(`subscriptions.level.${lvl}`)}</option>)}
               </Select>
             </Field>
-            {editLevel !== "MINISTRY" && (
+            {editLevel !== "MINISTRY" && (editMulti ? (
+              <Field label={t("responsables.targetEntity")} hint={t("users.multiEntityHint")}>
+                <EntityMultiPicker options={entityOptions} selected={editEntities} onChange={setEditEntities}
+                  placeholder={t("users.searchEntityPlaceholder")} />
+              </Field>
+            ) : (
               <Field label={t("responsables.targetEntity")}>
                 <Select value={editEntity} onChange={(e) => setEditEntity(e.target.value)}>
                   <option value="">{t("subscriptions.chooseOption")}</option>
                   {entityOptions.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
                 </Select>
               </Field>
-            )}
+            ))}
             <Field label={t("responsables.roleLabel")}>
               <Select value={role} onChange={(e) => setRole(e.target.value as ModuleRole)}>
                 {editRoleOptions.map((r) => <option key={r} value={r}>{t(`responsables.role.${r}`)}</option>)}

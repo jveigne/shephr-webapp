@@ -15,6 +15,17 @@ export function canHaveResponsables(level: NodeLevel): boolean {
   return RESP_ROLES_BY_LEVEL[level].length > 0;
 }
 
+/**
+ * Rôles dont le rattachement est un SET (home + autres), et non une entité unique.
+ * <p>Palier A2 (JP 14/08) : le DIRIGEANT_UNITE rejoint le DIRIGEANT (villes) et le SENIOR
+ * (régions) — un dirigeant peut tenir plusieurs assemblées de maison. Le MEMBRE en est exclu :
+ * il appartient à une seule assemblée. Règle partagée par la page Utilisateurs et le drawer
+ * Responsables, qui écrivent tous deux `reassign { entityId, entityIds }`.
+ */
+export function isMultiAttachmentRole(role: ModuleRole): boolean {
+  return role === "DIRIGEANT_UNITE" || role === "DIRIGEANT" || role === "DIRIGEANT_SENIOR";
+}
+
 // La règle « responsable d'un nœud » (rattachement Objectifs OU Dons, home ou multiple) vit
 // désormais CÔTÉ SERVEUR — endpoints /api/church/admin/users/responsables et /responsable-counts.
 // Elle ne peut plus être évaluée ici : le back-office ne charge plus l'annuaire complet, et une
@@ -25,6 +36,10 @@ export function buildGoalAttachment(level: NodeLevel, nodeId: string, role: Modu
   const base: { goalRole: ModuleRole; goalUnitId?: string; goalUnitIds?: string[]; goalCityId?: string; goalZoneId?: string; goalCountryIds?: string[] } = { goalRole: role };
   if (level === "UNIT") {
     base.goalUnitId = nodeId;
+    // Palier A2 (JP 14/08) : un dirigeant d'unité porte un SET d'assemblées (home comprise).
+    // Sans `goalUnitIds`, un rattachement posé ici restait invisible du multi-assemblées.
+    // Un MEMBRE, lui, n'appartient qu'à une seule assemblée : on ne lui pose pas de set.
+    if (role === "DIRIGEANT_UNITE") base.goalUnitIds = [nodeId];
   } else if (level === "LOCALITY") {
     base.goalCityId = nodeId;
   } else if (level === "ZONE") {
