@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Badge, Button, Field, Input, Modal, Select, Table, Toggle, TopBar } from "@/components/primitives";
 import { RemoteSupervisorSelect, type UserRef } from "@/components/UserCombobox";
+import { EntityMultiPicker } from "@/components/EntityMultiPicker";
+import { isMultiAttachmentRole } from "@/lib/responsables";
 import { useToasts } from "@/context/ToastContext";
 import { useDebounced } from "@/hooks/useDebounced";
 import { listMinistries, type MinistryResponse } from "@/services/ministryService";
@@ -96,10 +98,12 @@ export default function UtilisateursPage() {
   // afficherait une liste vide.
   useEffect(() => { setPage(0); }, [ministryId, debouncedSearch, placeNodeId, fRole, size]);
 
+  // Chargée MÊME sans ministère sélectionné (« Tous les ministères », l'état par défaut de la
+  // page) : sans elle, les noms de rattachement s'affichaient « Région · — » et les sélecteurs
+  // d'entité de la modale Rôle étaient vides — on ne pouvait plus affecter personne.
   const structureQ = useQuery({
     queryKey: ["ministry-structure", ministryId],
     queryFn: () => fetchMinistryStructure(ministryId),
-    enabled: !!ministryId,
   });
 
   const org = structureQ.data;
@@ -119,7 +123,9 @@ export default function UtilisateursPage() {
     if (zones.length) return `${t("subscriptions.level.ZONE")} · ${zones.map((z) => zoneName.get(z) ?? "—").join(", ")}`;
     const cities = unionIds(u.goalCityId, u.goalCityIds);
     if (cities.length) return `${t("subscriptions.level.LOCALITY")} · ${cities.map((c) => cityName.get(c) ?? "—").join(", ")}`;
-    if (u.goalUnitId) return `${t("subscriptions.level.UNIT")} · ${unitName.get(u.goalUnitId) ?? "—"}`;
+    // Palier A2 : un DIRIGEANT_UNITE peut tenir plusieurs assemblées — les lister toutes.
+    const units = unionIds(u.goalUnitId, u.goalUnitIds);
+    if (units.length) return `${t("subscriptions.level.UNIT")} · ${units.map((x) => unitName.get(x) ?? "—").join(", ")}`;
     if (u.goalCountryIds?.length) return `${t("subscriptions.level.COUNTRY")} · ${u.goalCountryIds.map((c) => countryName.get(c) ?? "—").join(", ")}`;
     if (u.goalRole === "LEADER" || u.goalRole === "SECRETARIAT") return t("subscriptions.level.MINISTRY");
     return "—";
@@ -197,12 +203,15 @@ export default function UtilisateursPage() {
   const currentEntitiesFor = (u: AdminUserResponse, r: ModuleRole): string[] => {
     const kind = entityKind(r);
     const home = currentEntityFor(u, r);
-    const set = kind === "city" ? u.goalCityIds : kind === "zone" ? u.goalZoneIds : [];
+    const set = kind === "city" ? u.goalCityIds
+      : kind === "zone" ? u.goalZoneIds
+      : r === "DIRIGEANT_UNITE" ? u.goalUnitIds
+      : [];
     const rest = (set ?? []).filter((id) => id !== home);
     return home ? [home, ...rest] : rest;
   };
 
-  const isMultiKind = (r: ModuleRole) => entityKind(r) === "city" || entityKind(r) === "zone";
+  const isMultiKind = isMultiAttachmentRole;
   const entityRequired = (r: ModuleRole) => ENTITY_REQUIRED_ROLES.includes(r);
 
   const optionsForKind = (r: ModuleRole): Array<{ id: string; name: string }> =>
@@ -268,7 +277,11 @@ export default function UtilisateursPage() {
       };
       // Rattachement posé selon le rôle, uniquement s'il a été renseigné (facultatif ≥ SENIOR).
       const picked = isMultiKind(newRole) ? newEntities : (newEntity ? [newEntity] : []);
-      if (kind === "unit" && picked[0]) body.goalUnitId = picked[0];
+      // A2 : la 1ʳᵉ assemblée est la principale (home), les suivantes élargissent le périmètre.
+      if (kind === "unit" && picked[0]) {
+        body.goalUnitId = picked[0];
+        if (isMultiKind(newRole)) body.goalUnitIds = picked;
+      }
       if (kind === "city" && picked[0]) { body.goalCityId = picked[0]; body.goalCityIds = picked; }
       if (kind === "zone" && picked[0]) { body.goalZoneId = picked[0]; body.goalZoneIds = picked; }
       if (kind === "country" && picked.length) body.goalCountryIds = picked;
@@ -539,56 +552,5 @@ export default function UtilisateursPage() {
         <p style={{ margin: 0, color: "var(--ink-600)" }}>{t("users.deleteWarning")}</p>
       </Modal>
     </>
-  );
-}
-
-/**
- * Sélecteur multi-entités (villes d'un DIRIGEANT, régions d'un SENIOR) : recherche + liste cochable
- * + badges des sélections. L'ordre de sélection compte : la première est le rattachement principal (★).
- */
-function EntityMultiPicker({
-  options, selected, onChange, placeholder,
-}: {
-  options: Array<{ id: string; name: string }>;
-  selected: string[];
-  onChange: (ids: string[]) => void;
-  placeholder: string;
-}) {
-  const [q, setQ] = useState("");
-  const query = q.trim().toLowerCase();
-  const matches = (query ? options.filter((o) => o.name.toLowerCase().includes(query)) : options).slice(0, 50);
-  const nameOf = (id: string) => options.find((o) => o.id === id)?.name ?? "—";
-  const toggle = (id: string) =>
-    onChange(selected.includes(id) ? selected.filter((s) => s !== id) : [...selected, id]);
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      {selected.length > 0 && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-          {selected.map((id, i) => (
-            <span key={id} className="badge earth" style={{ cursor: "pointer" }} title={nameOf(id)}
-              onClick={() => toggle(id)}>
-              {i === 0 ? "★ " : ""}{nameOf(id)} ✕
-            </span>
-          ))}
-        </div>
-      )}
-      <Input placeholder={placeholder} value={q} onChange={(e) => setQ(e.target.value)} />
-      <div style={{ border: "1px solid var(--line,#eee)", borderRadius: 8, maxHeight: 180, overflowY: "auto" }}>
-        {matches.map((o) => {
-          const on = selected.includes(o.id);
-          return (
-            <div key={o.id} onClick={() => toggle(o.id)}
-              style={{ padding: "7px 10px", cursor: "pointer", fontSize: 13.5, display: "flex", gap: 8, alignItems: "center", background: on ? "var(--parchment,#faf7f0)" : "transparent" }}>
-              <span style={{ width: 14, textAlign: "center", color: "var(--ink-500)" }}>{on ? "✓" : ""}</span>
-              {o.name}
-            </div>
-          );
-        })}
-        {matches.length === 0 && (
-          <div style={{ padding: "7px 10px", fontSize: 13, color: "var(--ink-400)" }}>—</div>
-        )}
-      </div>
-    </div>
   );
 }

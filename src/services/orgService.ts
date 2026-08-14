@@ -47,29 +47,47 @@ export interface UnitRow {
 }
 
 // ---- Lectures ----
-export function listCountriesFull(ministryId: string): Promise<CountryRow[]> {
-  return apiFetch<CountryRow[]>(`/api/org/admin/countries?ministryId=${ministryId}`);
+// `ministryId` FACULTATIF : sans lui, le backend renvoie tous les ministères pour un SUPER_ADMIN
+// (`getEffectiveMinistryFilter()` vaut null). On omet alors le paramètre plutôt que de l'envoyer
+// vide — c'est ce qui permet à la page Utilisateurs de fonctionner sur « Tous les ministères ».
+const q = (params: Record<string, string | undefined>) => {
+  const search = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v) search.set(k, v);
+  const s = search.toString();
+  return s ? `?${s}` : "";
+};
+
+export function listCountriesFull(ministryId?: string): Promise<CountryRow[]> {
+  return apiFetch<CountryRow[]>(`/api/org/admin/countries${q({ ministryId })}`);
 }
-export function listZonesFull(countryId: string): Promise<ZoneRow[]> {
-  return apiFetch<ZoneRow[]>(`/api/org/admin/zones?countryId=${countryId}`);
+export function listZonesFull(countryId?: string): Promise<ZoneRow[]> {
+  return apiFetch<ZoneRow[]>(`/api/org/admin/zones${q({ countryId })}`);
 }
-export function listLocalitiesFull(ministryId: string): Promise<LocalityRow[]> {
-  return apiFetch<LocalityRow[]>(`/api/org/admin/localities?ministryId=${ministryId}`);
+export function listLocalitiesFull(ministryId?: string): Promise<LocalityRow[]> {
+  return apiFetch<LocalityRow[]>(`/api/org/admin/localities${q({ ministryId })}`);
 }
-export function listUnitsFull(ministryId: string): Promise<UnitRow[]> {
-  return apiFetch<UnitRow[]>(`/api/org/admin/units?ministryId=${ministryId}`);
+export function listUnitsFull(ministryId?: string): Promise<UnitRow[]> {
+  return apiFetch<UnitRow[]>(`/api/org/admin/units${q({ ministryId })}`);
 }
 
-/** Structure complète d'un ministère, prête pour l'arbre (avec les lignes brutes en `data`). */
-export async function fetchMinistryStructure(ministryId: string): Promise<OrgData & {
+/**
+ * Structure complète, prête pour l'arbre (avec les lignes brutes en `data`).
+ *
+ * <p>Sans `ministryId`, on prend la structure de TOUS les ministères (vue cross-tenant du
+ * back-office). Dans ce cas les régions se chargent en une seule requête : une requête par nation
+ * sur l'ensemble de la plateforme serait un N+1 sans rapport avec le besoin.
+ */
+export async function fetchMinistryStructure(ministryId?: string): Promise<OrgData & {
   countries: CountryRow[]; zones: ZoneRow[]; localities: LocalityRow[]; units: UnitRow[];
 }> {
-  const countries = await listCountriesFull(ministryId);
-  const zonesNested = await Promise.all(countries.map((c) => listZonesFull(c.id)));
-  const zones = zonesNested.flat();
+  const scoped = ministryId || undefined;
+  const countries = await listCountriesFull(scoped);
+  const zones = scoped
+    ? (await Promise.all(countries.map((c) => listZonesFull(c.id)))).flat()
+    : await listZonesFull();
   const [localities, units] = await Promise.all([
-    listLocalitiesFull(ministryId),
-    listUnitsFull(ministryId),
+    listLocalitiesFull(scoped),
+    listUnitsFull(scoped),
   ]);
   return { countries, zones, localities, units };
 }
@@ -143,4 +161,54 @@ export function listNationNodes(): Promise<OrgNodeRow[]> {
 }
 export function updateNodeRegionLabel(nodeId: string, regionLabel: RegionLabel): Promise<OrgNodeRow> {
   return apiFetch<OrgNodeRow>(`/api/org/admin/nodes/${nodeId}`, { method: "PATCH", body: JSON.stringify({ regionLabel }) });
+}
+
+// ---- Historique des créations d'assemblées (palier C4) ----
+
+/** Rôles par module — mêmes valeurs que `userService.ModuleRole` (dupliqué ici pour ne pas coupler les deux services). */
+export type AssemblyCreatorRole =
+  | "MEMBRE" | "DIRIGEANT_UNITE" | "DIRIGEANT" | "DIRIGEANT_SENIOR"
+  | "DIRIGEANT_COORDINATEUR" | "LEADER" | "SECRETARIAT";
+
+// Mirrors com.excellence.back.org.admin.unit.dto.AssemblyCreationResponse
+export interface AssemblyCreationRow {
+  unitId: string;
+  name: string;
+  cityName: string | null;
+  regionName: string | null;
+  nationName: string | null;
+  /** Instant ISO. */
+  createdAt: string;
+  createdById: string | null;
+  /** JP 14/08 (palier C4) : null pour les assemblées créées AVANT la migration org/18 — afficher « — ». */
+  createdByName: string | null;
+  createdByRole: AssemblyCreatorRole | null;
+}
+
+/** Page renvoyée par Spring Data (mêmes champs que `UserPage`, cf. userService). */
+export interface AssemblyCreationPage {
+  content: AssemblyCreationRow[];
+  totalElements: number;
+  totalPages: number;
+  /** Index de la page courante, base 0. */
+  number: number;
+  first: boolean;
+  last: boolean;
+}
+
+/**
+ * Historique des créations d'assemblées, plus récentes d'abord (tri porté par le backend).
+ *
+ * <p>`ministryId` facultatif : sans lui le SUPER_ADMIN voit tous les ministères. La garde serveur
+ * (SUPER_ADMIN ou SECRETARIAT sur son seul ministère) reste la seule autorité — le filtre d'écran
+ * n'est qu'un confort de lecture.
+ */
+export function listAssemblyHistory(params: {
+  ministryId?: string; page?: number; size?: number;
+}): Promise<AssemblyCreationPage> {
+  const p = new URLSearchParams();
+  if (params.ministryId) p.set("ministryId", params.ministryId);
+  p.set("page", String(params.page ?? 0));
+  p.set("size", String(params.size ?? 25));
+  return apiFetch<AssemblyCreationPage>(`/api/org/admin/units/history?${p.toString()}`);
 }
