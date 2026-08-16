@@ -441,7 +441,9 @@
     "reassignTitle": "Reassign to a level",
     "reassignHint": "Pick the new hierarchical level, the attachment entity and the supervisor. The previous attachment is replaced.",
     "targetLevel": "Target level",
-    "targetEntity": "Attachment"
+    "targetEntity": "Attachment",
+    "homeAssembly": "Home assembly",
+    "homeAssemblyHint": "The assembly where this person declares THEIR OWN objectives — distinct from the position held here. Required for every Objectives role, coordinators and secretariat included."
   },
   "users": {
     "title": "Users",
@@ -506,6 +508,24 @@
     "entityOptionalHint": "Optional at this level: the role can be granted without a region, city or nation, and the attachment set later.",
     "codeTitle": "Activation code",
     "codeHint": "Send this code to the person. They enter it in the app to choose a password and activate their account.",
-    "codeExpiry": "Single use, valid for 14 days. Can be regenerated from the Structure page if needed."
+    "codeExpiry": "Single use, valid for 14 days. Can be regenerated from the Structure page if needed.",
+    "homeAssembly": "Home assembly",
+    "homeAssemblyHint": "The assembly where this person declares THEIR OWN objectives — distinct from the entity they lead. Required for every Objectives role, coordinators, leaders and secretariat included.",
+    "transferWarning": "Changing the assembly moves the person: their objectives follow them, past years included. The former assembly's total goes down, the new one's goes up.",
+    "colGoalSubmitted": "Objectives",
+    "goalSubmittedYes": "Submitted",
+    "goalSubmittedNo": "Not submitted",
+    "goalSubmittedNullHint": "Account with no home assembly, or platform administrator.",
+    "submissionCounter": "{{submitted}}/{{total}} have submitted their objectives",
+    "submissionCounterHint": "Across the whole filtered scope, not just the page shown.",
+    "goalsAction": "Objectives",
+    "goalsTitle": "Personal objectives",
+    "goalsYear": "Year {{year}}",
+    "goalsEmpty": "No objectives declared. An objective is personal: the person enters it themselves from their app.",
+    "pledgeLocked": "Locked",
+    "pledgeOpen": "Editable",
+    "unlockAction": "Unlock",
+    "unlockHint": "Unlocking reopens the year: the person corrects it themselves from their app.",
+    "unlockedToast": "Objectives reopened"
   }
 }

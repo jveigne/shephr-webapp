@@ -441,7 +441,9 @@
     "reassignTitle": "Réaffecter à un niveau",
     "reassignHint": "Choisissez le nouveau niveau hiérarchique, l'entité de rattachement et le superviseur. L'ancien rattachement est remplacé.",
     "targetLevel": "Niveau cible",
-    "targetEntity": "Rattachement"
+    "targetEntity": "Rattachement",
+    "homeAssembly": "Assemblée de rattachement",
+    "homeAssemblyHint": "Assemblée où cette personne déclare SES propres engagements — distincte du poste qu'elle occupe ici. Obligatoire pour tout rôle Objectifs, y compris coordinateur et secrétariat."
   },
   "users": {
     "title": "Utilisateurs",
@@ -506,6 +508,24 @@
     "entityOptionalHint": "Facultatif à ce niveau : le rôle peut être conféré sans région, ville ni nation, et le rattachement posé plus tard.",
     "codeTitle": "Code d'activation",
     "codeHint": "Transmettez ce code à la personne. Elle le saisit dans l'application pour choisir son mot de passe et activer son compte.",
-    "codeExpiry": "Usage unique, valable 14 jours. Régénérable depuis la page Structure si besoin."
+    "codeExpiry": "Usage unique, valable 14 jours. Régénérable depuis la page Structure si besoin.",
+    "homeAssembly": "Assemblée de rattachement",
+    "homeAssemblyHint": "Assemblée où cette personne déclare SES propres engagements — distincte de l'entité qu'elle dirige. Obligatoire pour tout rôle Objectifs, y compris coordinateur, dirigeant et secrétariat.",
+    "transferWarning": "Changer l'assemblée déplace la personne : ses engagements la suivent, années passées comprises. Le total de l'ancienne assemblée baisse, celui de la nouvelle monte.",
+    "colGoalSubmitted": "Engagement",
+    "goalSubmittedYes": "Soumis",
+    "goalSubmittedNo": "Non soumis",
+    "goalSubmittedNullHint": "Compte sans assemblée de rattachement, ou administrateur plateforme.",
+    "submissionCounter": "{{submitted}}/{{total}} ont soumis leur engagement",
+    "submissionCounterHint": "Sur tout le périmètre filtré, pas seulement la page affichée.",
+    "goalsAction": "Engagements",
+    "goalsTitle": "Engagements personnels",
+    "goalsYear": "Année {{year}}",
+    "goalsEmpty": "Aucun engagement déclaré. Un engagement est personnel : la personne le saisit elle-même depuis son application.",
+    "pledgeLocked": "Verrouillé",
+    "pledgeOpen": "Modifiable",
+    "unlockAction": "Déverrouiller",
+    "unlockHint": "Le déverrouillage rouvre l'année : la personne corrige elle-même depuis son application.",
+    "unlockedToast": "Engagements rouverts"
   }
 }

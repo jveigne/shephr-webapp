@@ -4,13 +4,15 @@ import { useTranslation } from "react-i18next";
 import { Badge, Button, Field, Input, Modal, Select, Table, Toggle, TopBar } from "@/components/primitives";
 import { RemoteSupervisorSelect, type UserRef } from "@/components/UserCombobox";
 import { EntityMultiPicker } from "@/components/EntityMultiPicker";
-import { isMultiAttachmentRole } from "@/lib/responsables";
+import { isMultiAttachmentRole, needsHomeAssembly } from "@/lib/responsables";
 import { useToasts } from "@/context/ToastContext";
 import { useDebounced } from "@/hooks/useDebounced";
 import { listMinistries, type MinistryResponse } from "@/services/ministryService";
 import { fetchMinistryStructure } from "@/services/orgService";
+import { getMemberGoals, unlockMember } from "@/services/goalsService";
 import {
-  deleteUser, inviteUser, reassignUser, searchUsers, setUserPassword, updateUserInfo, userLogin,
+  deleteUser, fetchGoalSubmissionSummary, inviteUser, reassignUser, searchUsers, setUserPassword,
+  updateUserInfo, userLogin,
   type AdminUserResponse, type InviteUserRequest, type ModuleRole,
 } from "@/services/userService";
 
@@ -20,10 +22,14 @@ const ROLES: ModuleRole[] = ["MEMBRE", "DIRIGEANT_UNITE", "DIRIGEANT", "DIRIGEAN
 const PAGE_SIZES = [25, 50, 100];
 
 /**
- * Rôles pour lesquels le rattachement géographique est OBLIGATOIRE : un responsable d'assemblée ou
- * de ville sans assemblée ni ville n'a pas de sens. À partir du rang SENIOR le rattachement est
- * facultatif — la visibilité vient de l'organigramme de personnes (superviseur), pas de la carte,
- * ce qui permet de nommer un senior / coordinateur / leader avant que sa région n'existe.
+ * Rôles pour lesquels l'entité DIRIGÉE est OBLIGATOIRE : un responsable d'assemblée ou de ville sans
+ * assemblée ni ville n'a pas de sens. À partir du rang SENIOR elle reste facultative — la visibilité
+ * vient de l'organigramme de personnes (superviseur), pas de la carte, ce qui permet de nommer un
+ * senior / coordinateur / leader avant que sa région n'existe (Lot 3.5, toujours en vigueur).
+ *
+ * ⚠ Ne concerne QUE l'entité dirigée. L'assemblée de rattachement PERSONNEL, elle, est obligatoire
+ * pour TOUS les rôles Objectifs depuis RG-BQ-03 — voir `needsHomeAssembly` : ce sont deux champs
+ * distincts dès le rang DIRIGEANT (on dirige une ville, on est membre d'une assemblée).
  */
 const ENTITY_REQUIRED_ROLES: ModuleRole[] = ["MEMBRE", "DIRIGEANT_UNITE", "DIRIGEANT"];
 
@@ -54,6 +60,8 @@ export default function UtilisateursPage() {
   const [newRole, setNewRole] = useState<ModuleRole>("DIRIGEANT_SENIOR");
   const [newEntity, setNewEntity] = useState("");
   const [newEntities, setNewEntities] = useState<string[]>([]);
+  // Assemblée de rattachement PERSONNEL (RG-BQ-03) — distincte de l'entité dirigée.
+  const [newHomeUnit, setNewHomeUnit] = useState("");
   const [newSupervisor, setNewSupervisor] = useState("");
   // Le superviseur est choisi par recherche serveur : on garde le compte retenu pour l'afficher.
   const [newSupervisorRef, setNewSupervisorRef] = useState<UserRef | undefined>(undefined);
@@ -68,8 +76,13 @@ export default function UtilisateursPage() {
   const [roleEntity, setRoleEntity] = useState("");
   // Multi-rattachements (villes d'un DIRIGEANT, régions d'un SENIOR) : la première est la principale.
   const [roleEntities, setRoleEntities] = useState<string[]>([]);
+  // Assemblée de rattachement PERSONNEL. La changer DÉPLACE la personne (RG-BQ-09) : ses engagements
+  // la suivent, années passées comprises.
+  const [roleHomeUnit, setRoleHomeUnit] = useState("");
   const [roleSupervisor, setRoleSupervisor] = useState("");
   const [roleSupervisorRef, setRoleSupervisorRef] = useState<UserRef | undefined>(undefined);
+  // Consultation des engagements d'une personne + déverrouillage (RG-BQ-08, recours du back-office).
+  const [goalsUser, setGoalsUser] = useState<AdminUserResponse | null>(null);
 
   const ministriesQ = useQuery({ queryKey: ["ministries"], queryFn: listMinistries });
 
@@ -92,6 +105,19 @@ export default function UtilisateursPage() {
       size,
     }),
     placeholderData: (prev) => prev, // pagination sans clignotement
+  });
+
+  // Compteur « X / Y ont soumis » (RG-BQ-06). Mêmes filtres que la liste, SANS la pagination : le
+  // total est calculé par le serveur sur tout le périmètre, pas sur les 25 lignes affichées.
+  const submissionQ = useQuery({
+    queryKey: ["goal-submission-summary", ministryId, debouncedSearch, placeNodeId ?? "", fRole],
+    queryFn: () => fetchGoalSubmissionSummary({
+      ministryId: ministryId || undefined,
+      search: debouncedSearch,
+      placeNodeId: searching ? undefined : placeNodeId,
+      role: (fRole || undefined) as ModuleRole | undefined,
+    }),
+    placeholderData: (prev) => prev,
   });
 
   // Retour en première page dès qu'un critère change : rester page 12 sur un résultat de 3 pages
@@ -146,6 +172,7 @@ export default function UtilisateursPage() {
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["users-page"] });
     qc.invalidateQueries({ queryKey: ["user-search"] }); // combobox superviseur (recherche serveur)
+    qc.invalidateQueries({ queryKey: ["goal-submission-summary"] }); // compteur « X / Y ont soumis »
   };
 
   const updateM = useMutation({
@@ -232,6 +259,8 @@ export default function UtilisateursPage() {
     setRoleValue(r);
     setRoleEntity(currentEntityFor(u, r));
     setRoleEntities(currentEntitiesFor(u, r));
+    // Rattachement personnel actuel : préremplir évite de déplacer quelqu'un par inadvertance.
+    setRoleHomeUnit(u.goalUnitId ?? "");
     setRoleSupervisor(u.supervisorId ?? "");
     // Le nom du superviseur vient de la ligne (résolu par le backend) : pas de recherche à l'ouverture.
     setRoleSupervisorRef(u.supervisorId
@@ -245,6 +274,9 @@ export default function UtilisateursPage() {
       goalRole: roleValue,
       entityId: entityKind(roleValue) ? (isMultiKind(roleValue) ? (roleEntities[0] ?? null) : roleEntity) : null,
       entityIds: isMultiKind(roleValue) ? roleEntities : undefined,
+      // RG-BQ-03 : envoyé uniquement pour les rôles où l'entité dirigée n'est pas l'assemblée.
+      // Pour MEMBRE / DIRIGEANT_UNITE c'est `entityId` qui porte le rattachement personnel.
+      goalUnitId: needsHomeAssembly(roleValue) ? (roleHomeUnit || undefined) : undefined,
       supervisorId: roleSupervisor || null,
     }),
     onSuccess: () => { invalidate(); setRoleUser(null); push({ kind: "ok", title: t("users.roleSavedToast"), msg: "" }); },
@@ -253,14 +285,16 @@ export default function UtilisateursPage() {
 
   const roleEntityOptions = optionsForKind(roleValue);
   const roleEntityLabel = labelForKind(roleValue);
-  const roleValid = !entityRequired(roleValue)
-    || (isMultiKind(roleValue) ? roleEntities.length > 0 : roleEntity !== "");
+  // Bloquer À L'ÉCRAN plutôt que d'encaisser un 422 GOAL_UNIT_REQUIRED du backend.
+  const roleValid = (!entityRequired(roleValue)
+    || (isMultiKind(roleValue) ? roleEntities.length > 0 : roleEntity !== ""))
+    && (!needsHomeAssembly(roleValue) || roleHomeUnit !== "");
 
   // ---- Création d'un compte (invitation : le code d'activation permet à la personne de poser
   // son mot de passe elle-même sur l'écran /invitation/{token}) ----
   const resetCreate = () => {
     setNewName(""); setNewUsername(""); setNewEmail("");
-    setNewRole("DIRIGEANT_SENIOR"); setNewEntity(""); setNewEntities([]);
+    setNewRole("DIRIGEANT_SENIOR"); setNewEntity(""); setNewEntities([]); setNewHomeUnit("");
     setNewSupervisor(""); setNewSupervisorRef(undefined);
   };
 
@@ -285,6 +319,9 @@ export default function UtilisateursPage() {
       if (kind === "city" && picked[0]) { body.goalCityId = picked[0]; body.goalCityIds = picked; }
       if (kind === "zone" && picked[0]) { body.goalZoneId = picked[0]; body.goalZoneIds = picked; }
       if (kind === "country" && picked.length) body.goalCountryIds = picked;
+      // RG-BQ-03 : au-dessus de l'assemblée, l'appartenance se pose à part de l'entité dirigée.
+      // Sans elle l'invitation est refusée (GOAL_UNIT_REQUIRED) — le backend ne la déduit pas.
+      if (needsHomeAssembly(newRole) && newHomeUnit) body.goalUnitId = newHomeUnit;
       return inviteUser(body);
     },
     onSuccess: (res) => {
@@ -299,7 +336,30 @@ export default function UtilisateursPage() {
 
   const createValid = newName.trim() !== ""
     && (newUsername.trim() !== "" || newEmail.trim() !== "")
-    && (!entityRequired(newRole) || (isMultiKind(newRole) ? newEntities.length > 0 : newEntity !== ""));
+    && (!entityRequired(newRole) || (isMultiKind(newRole) ? newEntities.length > 0 : newEntity !== ""))
+    && (!needsHomeAssembly(newRole) || newHomeUnit !== "");
+
+  // ---- Engagements d'une personne (RG-BQ-08 : le back-office rouvre, la personne corrige) ----
+  // L'édition directe d'un engagement par le secrétariat n'existe PAS côté backend : le seul
+  // recours est le déverrouillage, puis la saisie par l'intéressé lui-même.
+  const goalsQ = useQuery({
+    queryKey: ["member-goals", goalsUser?.id ?? ""],
+    queryFn: () => getMemberGoals(goalsUser!.id),
+    enabled: !!goalsUser,
+  });
+
+  const unlockM = useMutation({
+    mutationFn: () => unlockMember(goalsUser!.id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["member-goals", goalsUser?.id ?? ""] });
+      invalidate(); // le compteur de soumission et la colonne « Engagement » changent
+      push({ kind: "ok", title: t("users.unlockedToast"), msg: "" });
+    },
+    onError: (e: unknown) => push({ kind: "error", title: t("common.failure"), msg: e instanceof Error ? e.message : t("common.error") }),
+  });
+
+  const memberPledges = goalsQ.data?.memberPledges ?? [];
+  const hasLocked = memberPledges.some((p) => p.locked);
 
   const cols = [
     { label: t("users.colName"), render: (u: AdminUserResponse) => <span style={{ fontWeight: 500 }}>{u.fullName}</span> },
@@ -323,6 +383,17 @@ export default function UtilisateursPage() {
         </span>
       ),
     },
+    {
+      // RG-BQ-06 — état de soumission PERSONNELLE. `null` ne veut pas dire « ce rôle ne déclare
+      // pas » (tout compte rattaché déclare) mais « pas d'assemblée de rattachement, ou superAdmin » :
+      // ne JAMAIS y accoler un libellé « non applicable » lié à un rôle.
+      label: t("users.colGoalSubmitted"),
+      render: (u: AdminUserResponse) => (
+        u.goalSubmitted === true ? <Badge tone="ok" dot>{t("users.goalSubmittedYes")}</Badge>
+        : u.goalSubmitted === false ? <Badge tone="gray" dot>{t("users.goalSubmittedNo")}</Badge>
+        : <span style={{ color: "var(--ink-400)" }} title={t("users.goalSubmittedNullHint")}>—</span>
+      ),
+    },
     { label: t("users.colStatus"), render: (u: AdminUserResponse) => u.active ? <Badge tone="ok" dot>{t("users.active")}</Badge> : <Badge tone="gray" dot>{t("users.inactive")}</Badge> },
     {
       label: "",
@@ -330,6 +401,7 @@ export default function UtilisateursPage() {
         <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
           <Button variant="ghost" size="sm" onClick={() => openEdit(u)}>{t("common.update")}</Button>
           <Button variant="ghost" size="sm" onClick={() => openRole(u)}>{t("users.roleAction")}</Button>
+          <Button variant="ghost" size="sm" onClick={() => setGoalsUser(u)}>{t("users.goalsAction")}</Button>
           <Button variant="ghost" size="sm" onClick={() => { setPw(""); setPwUser(u); }}>{t("users.password")}</Button>
           <Button variant="danger" size="sm" onClick={() => setDelUser(u)}>{t("users.delete")}</Button>
         </div>
@@ -394,6 +466,16 @@ export default function UtilisateursPage() {
             </Field>
           </div>
 
+          {/* Compteur de soumission sur TOUT le périmètre filtré (RG-BQ-06), pas sur la page. */}
+          {submissionQ.data && submissionQ.data.total > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px", borderBottom: "1px solid var(--line,#eee)", background: "var(--parchment,#faf7f0)", flexWrap: "wrap" }}>
+              <span style={{ fontWeight: 600, color: "var(--ink-600)" }}>
+                {t("users.submissionCounter", { submitted: submissionQ.data.submitted, total: submissionQ.data.total })}
+              </span>
+              <span style={{ fontSize: 12.5, color: "var(--ink-400)" }}>{t("users.submissionCounterHint")}</span>
+            </div>
+          )}
+
           {usersQ.isLoading ? (
             <div style={{ padding: 24, color: "var(--ink-500)" }}>{t("common.loading")}</div>
           ) : (
@@ -456,6 +538,16 @@ export default function UtilisateursPage() {
               <Select value={newEntity} onChange={(e) => setNewEntity(e.target.value)}>
                 <option value="">{entityRequired(newRole) ? t("common.choose") : t("users.noAttachment")}</option>
                 {optionsForKind(newRole).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+              </Select>
+            </Field>
+          )}
+          {/* Assemblée de rattachement PERSONNEL — obligatoire pour tout rôle Objectifs (RG-BQ-03).
+              Masquée pour MEMBRE / DIRIGEANT_UNITE : l'entité choisie ci-dessus la porte déjà. */}
+          {needsHomeAssembly(newRole) && (
+            <Field label={t("users.homeAssembly")} hint={t("users.homeAssemblyHint")}>
+              <Select value={newHomeUnit} onChange={(e) => setNewHomeUnit(e.target.value)}>
+                <option value="">{t("common.choose")}</option>
+                {(org?.units ?? []).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
               </Select>
             </Field>
           )}
@@ -530,9 +622,75 @@ export default function UtilisateursPage() {
               </Select>
             </Field>
           )}
+          {/* Rattachement PERSONNEL : c'est aussi par ici qu'on déplace quelqu'un d'assemblée
+              (RG-BQ-09). Pour MEMBRE / DIRIGEANT_UNITE, l'entité ci-dessus le porte déjà. */}
+          {needsHomeAssembly(roleValue) && (
+            <Field label={t("users.homeAssembly")} hint={t("users.homeAssemblyHint")}>
+              <Select value={roleHomeUnit} onChange={(e) => setRoleHomeUnit(e.target.value)}>
+                <option value="">{t("common.choose")}</option>
+                {(org?.units ?? []).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+              </Select>
+            </Field>
+          )}
+          {/* Conséquence assumée mais surprenante : elle doit être écrite à l'écran. */}
+          {roleUser?.goalUnitId && roleHomeUnit && roleHomeUnit !== roleUser.goalUnitId && (
+            <p style={{ margin: 0, fontSize: 12.5, color: "var(--earth-700, #8a5a2b)" }}>{t("users.transferWarning")}</p>
+          )}
           <RemoteSupervisorSelect ministryId={ministryId || undefined} value={roleSupervisor} selected={roleSupervisorRef}
             onChange={(id, u) => { setRoleSupervisor(id); setRoleSupervisorRef(u); }} t={t} excludeId={roleUser?.id} />
           <p style={{ margin: 0, fontSize: 12.5, color: "var(--ink-400)" }}>{t("users.roleHint")}</p>
+        </div>
+      </Modal>
+
+      {/* Engagements personnels (consultation + déverrouillage) */}
+      <Modal open={!!goalsUser} onClose={() => setGoalsUser(null)} title={t("users.goalsTitle")}
+        sub={goalsUser ? `${goalsUser.fullName} · ${userLogin(goalsUser)}` : undefined}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setGoalsUser(null)}>{t("common.close")}</Button>
+            {hasLocked && (
+              <Button variant="primary" disabled={unlockM.isPending} onClick={() => unlockM.mutate()}>
+                {unlockM.isPending ? t("common.loading") : t("users.unlockAction")}
+              </Button>
+            )}
+          </>
+        }>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {goalsQ.isLoading ? (
+            <p style={{ margin: 0, color: "var(--ink-500)" }}>{t("common.loading")}</p>
+          ) : goalsQ.isError ? (
+            <p style={{ margin: 0, color: "var(--ink-600)" }}>
+              {goalsQ.error instanceof Error ? goalsQ.error.message : t("common.error")}
+            </p>
+          ) : memberPledges.length === 0 ? (
+            // Cas de figure massif attendu après la bascule : un dirigeant n'avait jusqu'ici aucun
+            // écran pour déclarer PERSONNELLEMENT (RG-BQ-11). Le dire, plutôt qu'un cadre vide.
+            <p style={{ margin: 0, color: "var(--ink-500)" }}>{t("users.goalsEmpty")}</p>
+          ) : (
+            <>
+              <p style={{ margin: 0, fontSize: 13, color: "var(--ink-500)" }}>
+                {t("users.goalsYear", { year: goalsQ.data?.year })}
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {memberPledges.map((p) => (
+                  <div key={p.id} className="card" style={{ padding: 10, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                    <span style={{ fontWeight: 600 }}>{p.categoryCode}</span>
+                    <span style={{ color: "var(--ink-600)" }}>
+                      {p.targetAmount ?? p.targetCount ?? "—"}
+                    </span>
+                    <span style={{ marginLeft: "auto" }}>
+                      {p.locked
+                        ? <Badge tone="gray" dot>{t("users.pledgeLocked")}</Badge>
+                        : <Badge tone="ok" dot>{t("users.pledgeOpen")}</Badge>}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              {hasLocked && (
+                <p style={{ margin: 0, fontSize: 12.5, color: "var(--ink-400)" }}>{t("users.unlockHint")}</p>
+              )}
+            </>
+          )}
         </div>
       </Modal>
 
