@@ -163,12 +163,41 @@ export function updateNodeRegionLabel(nodeId: string, regionLabel: RegionLabel):
   return apiFetch<OrgNodeRow>(`/api/org/admin/nodes/${nodeId}`, { method: "PATCH", body: JSON.stringify({ regionLabel }) });
 }
 
-// ---- Historique des créations d'assemblées (palier C4) ----
+// ---- Historiques de structure (palier C4 : créations · JP 16/08 : changements d'assemblée) ----
 
 /** Rôles par module — mêmes valeurs que `userService.ModuleRole` (dupliqué ici pour ne pas coupler les deux services). */
 export type AssemblyCreatorRole =
   | "MEMBRE" | "DIRIGEANT_UNITE" | "DIRIGEANT" | "DIRIGEANT_SENIOR"
   | "DIRIGEANT_COORDINATEUR" | "LEADER" | "SECRETARIAT";
+
+/**
+ * Filtres communs aux DEUX historiques : mêmes paramètres, même garde serveur
+ * (`HistoryScopeGuard` : SUPER_ADMIN partout, SECRETARIAT — Objectifs OU Dons — sur son seul
+ * ministère ; un `ministryId` étranger est un 403, pas un repli silencieux).
+ *
+ * ⚠ Aucun `sort` : le tri est figé côté SQL (créations `createdAt desc`, changements
+ * `changedAt desc`). En envoyer un ne ferait que s'ajouter derrière, sans effet utile.
+ */
+export interface HistoryQuery {
+  ministryId?: string;
+  countryId?: string;
+  zoneId?: string;
+  localityId?: string;
+  /** Base 0. */
+  page?: number;
+  size?: number;
+}
+
+const historyParams = (params: HistoryQuery): string => {
+  const p = new URLSearchParams();
+  if (params.ministryId) p.set("ministryId", params.ministryId);
+  if (params.countryId) p.set("countryId", params.countryId);
+  if (params.zoneId) p.set("zoneId", params.zoneId);
+  if (params.localityId) p.set("localityId", params.localityId);
+  p.set("page", String(params.page ?? 0));
+  p.set("size", String(params.size ?? 25));
+  return p.toString();
+};
 
 // Mirrors com.excellence.back.org.admin.unit.dto.AssemblyCreationResponse
 export interface AssemblyCreationRow {
@@ -202,13 +231,83 @@ export interface AssemblyCreationPage {
  * <p>`ministryId` facultatif : sans lui le SUPER_ADMIN voit tous les ministères. La garde serveur
  * (SUPER_ADMIN ou SECRETARIAT sur son seul ministère) reste la seule autorité — le filtre d'écran
  * n'est qu'un confort de lecture.
+ *
+ * <p>Les filtres géographiques portent sur le lieu de l'assemblée CRÉÉE. Une ville sans région
+ * (`zoneId` nullable en base) ne remonte volontairement pas sur un filtre région ou nation.
  */
-export function listAssemblyHistory(params: {
-  ministryId?: string; page?: number; size?: number;
-}): Promise<AssemblyCreationPage> {
-  const p = new URLSearchParams();
-  if (params.ministryId) p.set("ministryId", params.ministryId);
-  p.set("page", String(params.page ?? 0));
-  p.set("size", String(params.size ?? 25));
-  return apiFetch<AssemblyCreationPage>(`/api/org/admin/units/history?${p.toString()}`);
+export function listAssemblyHistory(params: HistoryQuery): Promise<AssemblyCreationPage> {
+  return apiFetch<AssemblyCreationPage>(`/api/org/admin/units/history?${historyParams(params)}`);
+}
+
+// ---- Historique des changements d'assemblée (JP 16/08) ----
+
+/**
+ * Qui a écrit la ligne : `SELF` = la personne s'est déplacée elle-même (RG-BQ-13) · `ADMIN` = le
+ * secrétariat / le back-office l'a déplacée (RG-BQ-09).
+ *
+ * Mirrors com.excellence.back.org.unit.history.AssemblyChangeSource
+ */
+export type AssemblyChangeSource = "SELF" | "ADMIN";
+
+/**
+ * Mirrors com.excellence.back.org.admin.unit.dto.AssemblyChangeResponse
+ *
+ * <p>Se lit comme une phrase : « le 16/08, Marie Dupont est passée de Bethel à Siloé (Douala,
+ * Littoral, Cameroun) — déplacée par le secrétariat ».
+ *
+ * <p>Noms de LIEUX : ceux enregistrés au moment du déplacement (une ville renommée ne réécrit pas
+ * le passé). Noms de PERSONNES : les noms d'aujourd'hui, résolus à la lecture — `null` si le compte
+ * a été supprimé depuis.
+ */
+export interface AssemblyChangeRow {
+  id: string;
+
+  userId: string;
+  userName: string | null;
+
+  /** `null` = premier rattachement (la personne n'était nulle part) — afficher « — ». */
+  fromUnitId: string | null;
+  fromUnitName: string | null;
+  toUnitId: string;
+  toUnitName: string | null;
+
+  /** Lieu de l'assemblée d'ARRIVÉE — ce sont ces trois ids que les filtres attaquent. */
+  localityId: string | null;
+  cityName: string | null;
+  zoneId: string | null;
+  regionName: string | null;
+  countryId: string | null;
+  nationName: string | null;
+
+  /** Instant ISO. */
+  changedAt: string;
+  changedById: string | null;
+  /** Identique à `userName` quand `source === "SELF"`. */
+  changedByName: string | null;
+  source: AssemblyChangeSource;
+  ministryId: string | null;
+}
+
+/** Page renvoyée par Spring Data (mêmes champs que `AssemblyCreationPage`). */
+export interface AssemblyChangePage {
+  content: AssemblyChangeRow[];
+  totalElements: number;
+  totalPages: number;
+  /** Index de la page courante, base 0. */
+  number: number;
+  first: boolean;
+  last: boolean;
+}
+
+/**
+ * Historique des changements d'assemblée, plus récents d'abord.
+ *
+ * <p>⚠ Les filtres géographiques portent sur l'assemblée d'ARRIVÉE : « les changements de ma
+ * région » = les personnes qui y sont ARRIVÉES. Un filtre « départ » n'existe pas côté serveur — ne
+ * pas réinterpréter celui-ci.
+ */
+export function listAssemblyChanges(params: HistoryQuery): Promise<AssemblyChangePage> {
+  return apiFetch<AssemblyChangePage>(
+    `/api/org/admin/units/history/assembly-changes?${historyParams(params)}`,
+  );
 }

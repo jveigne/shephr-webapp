@@ -169,6 +169,29 @@ export function searchUsers(q: UserQuery): Promise<UserPage> {
   return apiFetch<UserPage>(`/api/church/admin/users?${p.toString()}`);
 }
 
+/**
+ * Comptes du module Objectifs SANS assemblée de rattachement (palier G5, RG-BQ-03).
+ *
+ * <p>Prédicat serveur : `goalRole != null` ET `goalUnitId == null` ET `superAdmin == false`. Un
+ * compte purement Dons n'y figure donc pas, un administrateur plateforme non plus. C'est une liste
+ * de TRAVAIL — on l'épuise —, d'où le tri serveur par nom (et non par date d'inscription comme
+ * l'annuaire).
+ *
+ * <p>⚠ `goalSubmitted` vaut toujours `null` sur ces lignes (la requête d'engagements n'est pas
+ * lancée) : ne pas y afficher la colonne « Engagement soumis ».
+ *
+ * <p>Garde serveur : superAdmin, ou SECRETARIAT **Objectifs** de son propre ministère — un
+ * secrétariat Dons est refusé ici alors qu'il voit les historiques de structure.
+ */
+export function listUnattachedUsers(q: { ministryId?: string; active?: boolean; page?: number; size?: number }): Promise<UserPage> {
+  const p = new URLSearchParams();
+  if (q.ministryId) p.set("ministryId", q.ministryId);
+  if (q.active !== undefined) p.set("active", String(q.active));
+  p.set("page", String(q.page ?? 0));
+  p.set("size", String(q.size ?? 25));
+  return apiFetch<UserPage>(`/api/church/admin/users/unattached?${p.toString()}`);
+}
+
 /** Mirrors com.excellence.back.auth.admin.user.dto.GoalSubmissionSummaryResponse */
 export interface GoalSubmissionSummary {
   submitted: number;

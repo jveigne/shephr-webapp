@@ -9,10 +9,13 @@ import { useToasts } from "@/context/ToastContext";
 import { useDebounced } from "@/hooks/useDebounced";
 import { listMinistries, type MinistryResponse } from "@/services/ministryService";
 import { fetchMinistryStructure } from "@/services/orgService";
-import { getMemberGoals, unlockMember } from "@/services/goalsService";
 import {
-  deleteUser, fetchGoalSubmissionSummary, inviteUser, reassignUser, searchUsers, setUserPassword,
-  updateUserInfo, userLogin,
+  createMemberPledge, getActiveGoal, getMemberGoals, unlockMember,
+  type GoalCategoryResponse,
+} from "@/services/goalsService";
+import {
+  deleteUser, fetchGoalSubmissionSummary, inviteUser, listUnattachedUsers, reassignUser, searchUsers,
+  setUserPassword, updateUserInfo, userLogin,
   type AdminUserResponse, type InviteUserRequest, type ModuleRole,
 } from "@/services/userService";
 
@@ -33,12 +36,22 @@ const PAGE_SIZES = [25, 50, 100];
  */
 const ENTITY_REQUIRED_ROLES: ModuleRole[] = ["MEMBRE", "DIRIGEANT_UNITE", "DIRIGEANT"];
 
+/**
+ * Deux listes, un seul écran (palier G5) : l'annuaire complet, et les comptes Objectifs SANS
+ * assemblée de rattachement. La seconde est une liste de TRAVAIL — on la règle ligne à ligne avec
+ * la MÊME modale de rôle/rattachement, d'où le partage de page plutôt qu'un écran séparé.
+ */
+type UsersView = "all" | "unattached";
+
 export default function UtilisateursPage() {
   const { t } = useTranslation();
   const { push } = useToasts();
   const qc = useQueryClient();
 
+  const [view, setView] = useState<UsersView>("all");
   const [ministryId, setMinistryId] = useState("");
+  // Filtre d'activité, propre à la liste « sans assemblée » : "" = tous.
+  const [uActive, setUActive] = useState<"" | "true" | "false">("");
   const [fCountry, setFCountry] = useState("");
   const [fZone, setFZone] = useState("");
   const [fUnit, setFUnit] = useState("");
@@ -81,8 +94,14 @@ export default function UtilisateursPage() {
   const [roleHomeUnit, setRoleHomeUnit] = useState("");
   const [roleSupervisor, setRoleSupervisor] = useState("");
   const [roleSupervisorRef, setRoleSupervisorRef] = useState<UserRef | undefined>(undefined);
-  // Consultation des engagements d'une personne + déverrouillage (RG-BQ-08, recours du back-office).
+  // Consultation des engagements d'une personne + déverrouillage + correction (RG-BQ-08).
   const [goalsUser, setGoalsUser] = useState<AdminUserResponse | null>(null);
+  // null = année par défaut du serveur (année courante) ; sinon l'année choisie dans la modale.
+  const [goalsYear, setGoalsYear] = useState<number | null>(null);
+  // Formulaire de correction (palier G4) : replié tant qu'on n'en a pas besoin.
+  const [corrOpen, setCorrOpen] = useState(false);
+  const [corrCategoryId, setCorrCategoryId] = useState("");
+  const [corrValue, setCorrValue] = useState("");
 
   const ministriesQ = useQuery({ queryKey: ["ministries"], queryFn: listMinistries });
 
@@ -104,7 +123,23 @@ export default function UtilisateursPage() {
       page,
       size,
     }),
+    enabled: view === "all",
     placeholderData: (prev) => prev, // pagination sans clignotement
+  });
+
+  // Palier G5 — comptes Objectifs sans assemblée. Le prédicat est ENTIÈREMENT serveur (goalRole
+  // renseigné, goalUnitId absent, pas superAdmin) : ni recherche ni filtre géographique ici, ils
+  // n'auraient pas de sens sur une liste définie par l'ABSENCE de lieu.
+  const unattachedQ = useQuery({
+    queryKey: ["users-unattached", ministryId, uActive, page, size],
+    queryFn: () => listUnattachedUsers({
+      ministryId: ministryId || undefined,
+      active: uActive === "" ? undefined : uActive === "true",
+      page,
+      size,
+    }),
+    enabled: view === "unattached",
+    placeholderData: (prev) => prev,
   });
 
   // Compteur « X / Y ont soumis » (RG-BQ-06). Mêmes filtres que la liste, SANS la pagination : le
@@ -117,12 +152,13 @@ export default function UtilisateursPage() {
       placeNodeId: searching ? undefined : placeNodeId,
       role: (fRole || undefined) as ModuleRole | undefined,
     }),
+    enabled: view === "all",
     placeholderData: (prev) => prev,
   });
 
-  // Retour en première page dès qu'un critère change : rester page 12 sur un résultat de 3 pages
-  // afficherait une liste vide.
-  useEffect(() => { setPage(0); }, [ministryId, debouncedSearch, placeNodeId, fRole, size]);
+  // Retour en première page dès qu'un critère (ou l'onglet) change : rester page 12 sur un résultat
+  // de 3 pages afficherait une liste vide.
+  useEffect(() => { setPage(0); }, [view, ministryId, debouncedSearch, placeNodeId, fRole, uActive, size]);
 
   // Chargée MÊME sans ministère sélectionné (« Tous les ministères », l'état par défaut de la
   // page) : sans elle, les noms de rattachement s'affichaient « Région · — » et les sélecteurs
@@ -159,18 +195,20 @@ export default function UtilisateursPage() {
 
   // Les lignes viennent telles quelles du serveur : plus aucun filtrage en mémoire, sinon la
   // pagination serait fausse (on retirerait des lignes d'une page déjà découpée par le backend).
+  const listQ = view === "all" ? usersQ : unattachedQ;
   const rows = useMemo(
-    () => (usersQ.data?.content ?? []).map((u) => ({ ...u, _key: u.id })),
-    [usersQ.data],
+    () => (listQ.data?.content ?? []).map((u) => ({ ...u, _key: u.id })),
+    [listQ.data],
   );
 
-  const total = usersQ.data?.totalElements ?? 0;
-  const totalPages = usersQ.data?.totalPages ?? 0;
+  const total = listQ.data?.totalElements ?? 0;
+  const totalPages = listQ.data?.totalPages ?? 0;
   const firstShown = total === 0 ? 0 : page * size + 1;
   const lastShown = Math.min(total, page * size + rows.length);
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["users-page"] });
+    qc.invalidateQueries({ queryKey: ["users-unattached"] }); // un rattachement retire la ligne
     qc.invalidateQueries({ queryKey: ["user-search"] }); // combobox superviseur (recherche serveur)
     qc.invalidateQueries({ queryKey: ["goal-submission-summary"] }); // compteur « X / Y ont soumis »
   };
@@ -339,17 +377,31 @@ export default function UtilisateursPage() {
     && (!entityRequired(newRole) || (isMultiKind(newRole) ? newEntities.length > 0 : newEntity !== ""))
     && (!needsHomeAssembly(newRole) || newHomeUnit !== "");
 
-  // ---- Engagements d'une personne (RG-BQ-08 : le back-office rouvre, la personne corrige) ----
-  // L'édition directe d'un engagement par le secrétariat n'existe PAS côté backend : le seul
-  // recours est le déverrouillage, puis la saisie par l'intéressé lui-même.
+  // ---- Engagements d'une personne (RG-BQ-08) ----
+  // Deux recours DISTINCTS, tous deux portés ici : rouvrir l'année (la personne corrige elle-même)
+  // ou corriger à sa place (palier G4). Corriger écrit MÊME verrouillé et ne lève PAS le verrou.
+  const openGoals = (u: AdminUserResponse) => {
+    setGoalsYear(null); // année par défaut du serveur
+    setCorrOpen(false); setCorrCategoryId(""); setCorrValue("");
+    setGoalsUser(u);
+  };
+
   const goalsQ = useQuery({
-    queryKey: ["member-goals", goalsUser?.id ?? ""],
-    queryFn: () => getMemberGoals(goalsUser!.id),
+    queryKey: ["member-goals", goalsUser?.id ?? "", goalsYear ?? 0],
+    queryFn: () => getMemberGoals(goalsUser!.id, goalsYear ?? undefined),
+    enabled: !!goalsUser,
+  });
+
+  // Catégories + années ouvertes du Goal actif : sans elles le formulaire de correction ne peut
+  // rien proposer. Chargé seulement quand la modale s'ouvre.
+  const activeGoalQ = useQuery({
+    queryKey: ["active-goal"],
+    queryFn: getActiveGoal,
     enabled: !!goalsUser,
   });
 
   const unlockM = useMutation({
-    mutationFn: () => unlockMember(goalsUser!.id),
+    mutationFn: () => unlockMember(goalsUser!.id, goalsYear ?? undefined),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["member-goals", goalsUser?.id ?? ""] });
       invalidate(); // le compteur de soumission et la colonne « Engagement » changent
@@ -360,6 +412,46 @@ export default function UtilisateursPage() {
 
   const memberPledges = goalsQ.data?.memberPledges ?? [];
   const hasLocked = memberPledges.some((p) => p.locked);
+
+  const activeGoal = activeGoalQ.data;
+  const goalCategories: GoalCategoryResponse[] = activeGoal?.categories ?? [];
+  // Année effectivement à l'écran : celle choisie, sinon celle que le serveur a retenue.
+  const shownYear = goalsYear ?? goalsQ.data?.year ?? activeGoal?.currentYear;
+  // `YEAR_NOT_OPEN` (422) n'est contournable par PERSONNE, secrétariat compris : si l'année n'est
+  // pas ouverte, on le dit au lieu de laisser envoyer un formulaire voué au refus.
+  const yearOpen = !activeGoal || (shownYear != null && activeGoal.openYears.includes(shownYear));
+  const corrCategory = goalCategories.find((c) => c.id === corrCategoryId);
+  // La cible sans assemblée déclencherait `NO_ASSEMBLY_ATTACHMENT` (422) : la rattacher d'abord.
+  const targetHasAssembly = !!goalsUser?.goalUnitId;
+  const corrValid = corrCategoryId !== "" && corrValue.trim() !== "" && Number.isFinite(Number(corrValue))
+    && Number(corrValue) >= 0 && yearOpen && targetHasAssembly;
+
+  const correctM = useMutation({
+    mutationFn: () => {
+      const amount = Number(corrValue);
+      return createMemberPledge(goalsUser!.id, {
+        categoryId: corrCategoryId,
+        year: shownYear ?? undefined,
+        // La catégorie décide du champ : CURRENCY → montant, COUNT → nombre entier.
+        targetAmount: corrCategory?.unitType === "CURRENCY" ? amount : undefined,
+        targetCount: corrCategory?.unitType === "COUNT" ? Math.round(amount) : undefined,
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["member-goals", goalsUser?.id ?? ""] });
+      invalidate();
+      setCorrOpen(false); setCorrCategoryId(""); setCorrValue("");
+      push({ kind: "ok", title: t("users.correctedToast"), msg: t("users.correctedToastMsg") });
+    },
+    onError: (e: unknown) => push({ kind: "error", title: t("common.failure"), msg: e instanceof Error ? e.message : t("common.error") }),
+  });
+
+  /** Ouvre le formulaire prérempli sur un engagement existant (le geste courant : rectifier). */
+  const startCorrection = (categoryId: string, value: number | null) => {
+    setCorrCategoryId(categoryId);
+    setCorrValue(value != null ? String(value) : "");
+    setCorrOpen(true);
+  };
 
   const cols = [
     { label: t("users.colName"), render: (u: AdminUserResponse) => <span style={{ fontWeight: 500 }}>{u.fullName}</span> },
@@ -401,9 +493,47 @@ export default function UtilisateursPage() {
         <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
           <Button variant="ghost" size="sm" onClick={() => openEdit(u)}>{t("common.update")}</Button>
           <Button variant="ghost" size="sm" onClick={() => openRole(u)}>{t("users.roleAction")}</Button>
-          <Button variant="ghost" size="sm" onClick={() => setGoalsUser(u)}>{t("users.goalsAction")}</Button>
+          <Button variant="ghost" size="sm" onClick={() => openGoals(u)}>{t("users.goalsAction")}</Button>
           <Button variant="ghost" size="sm" onClick={() => { setPw(""); setPwUser(u); }}>{t("users.password")}</Button>
           <Button variant="danger" size="sm" onClick={() => setDelUser(u)}>{t("users.delete")}</Button>
+        </div>
+      ),
+    },
+  ];
+
+  // Liste « sans assemblée » : mêmes lignes, autre lecture. Pas de colonne « Engagement » —
+  // `goalSubmitted` vaut toujours `null` ici (le backend ne lance pas la requête d'engagements),
+  // l'afficher ferait croire à une information alors qu'il n'y en a aucune.
+  const unattachedCols = [
+    { label: t("users.colName"), render: (u: AdminUserResponse) => <span style={{ fontWeight: 500 }}>{u.fullName}</span> },
+    {
+      label: t("users.colLogin"),
+      render: (u: AdminUserResponse) => (
+        <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.3 }}>
+          <span style={{ color: "var(--ink-600)" }}>{userLogin(u)}</span>
+          {u.username && u.email && <span style={{ color: "var(--ink-400)", fontSize: 12 }}>{u.email}</span>}
+        </div>
+      ),
+    },
+    { label: t("users.colRole"), render: (u: AdminUserResponse) => u.goalRole ? <Badge tone="earth">{t(`responsables.role.${u.goalRole}`)}</Badge> : <span style={{ color: "var(--ink-400)" }}>—</span> },
+    { label: t("users.colSupervisor"), render: (u: AdminUserResponse) => <span style={{ color: "var(--ink-500)" }}>{u.supervisorId ? (u.supervisorFullName ?? "—") : t("responsables.root")}</span> },
+    {
+      label: t("users.colRegisteredAt"),
+      render: (u: AdminUserResponse) => (
+        <span style={{ color: "var(--ink-500)" }}>
+          {u.createdAt ? new Date(u.createdAt).toLocaleDateString() : "—"}
+        </span>
+      ),
+    },
+    { label: t("users.colStatus"), render: (u: AdminUserResponse) => u.active ? <Badge tone="ok" dot>{t("users.active")}</Badge> : <Badge tone="gray" dot>{t("users.inactive")}</Badge> },
+    {
+      label: "",
+      render: (u: AdminUserResponse) => (
+        <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+          {/* Le rattachement se pose avec la MÊME modale que le rôle : c'est le même écrit
+              serveur (`reassign`), et il laisse une ligne ADMIN dans l'historique des changements. */}
+          <Button variant="primary" size="sm" onClick={() => openRole(u)}>{t("users.attachAction")}</Button>
+          <Button variant="ghost" size="sm" onClick={() => openEdit(u)}>{t("common.update")}</Button>
         </div>
       ),
     },
@@ -414,6 +544,17 @@ export default function UtilisateursPage() {
       <TopBar title={t("users.title")} crumbs={[t("common.jexcellence"), t("users.title")]} />
       <div className="content">
         <div className="card" style={{ padding: 0 }}>
+          {/* Pas de bordure basse ici : `.tabs` porte déjà la sienne (sinon double filet). */}
+          <div style={{ padding: "12px 16px 0" }}>
+            <div className="tabs" style={{ marginBottom: 0 }}>
+              <button className={`tab ${view === "all" ? "active" : ""}`} onClick={() => setView("all")}>
+                {t("users.tabAll")}
+              </button>
+              <button className={`tab ${view === "unattached" ? "active" : ""}`} onClick={() => setView("unattached")}>
+                {t("users.tabUnattached")}
+              </button>
+            </div>
+          </div>
           <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderBottom: "1px solid var(--line,#eee)", flexWrap: "wrap" }}>
             <span style={{ fontWeight: 600 }}>{t("users.workspaceTitle")}</span>
             {/* Vide = TOUS les ministères : un nouvel inscrit est rattaché au ministère par défaut,
@@ -432,42 +573,59 @@ export default function UtilisateursPage() {
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: 12, padding: "12px 16px", flexWrap: "wrap", borderBottom: "1px solid var(--line,#eee)" }}>
-            <Field label={t("users.search")} hint={searching ? t("users.searchScopeHint") : undefined}>
-              <Input placeholder={t("users.searchPlaceholder")} value={search} onChange={(e) => setSearch(e.target.value)} />
-            </Field>
-            {/* Filtres géographiques : ils ont besoin de la structure d'UN ministère. */}
-            <Field label={t("subscriptions.level.COUNTRY")}>
-              <Select value={fCountry} disabled={!ministryId || searching}
-                onChange={(e) => { setFCountry(e.target.value); setFZone(""); setFUnit(""); }}>
-                <option value="">{t("users.all")}</option>
-                {(org?.countries ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </Select>
-            </Field>
-            <Field label={t("subscriptions.level.ZONE")}>
-              <Select value={fZone} disabled={!ministryId || searching} onChange={(e) => { setFZone(e.target.value); setFUnit(""); }}>
-                <option value="">{t("users.allFem")}</option>
-                {(org?.zones ?? [])
-                  .filter((z) => !fCountry || z.countryId === fCountry)
-                  .map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
-              </Select>
-            </Field>
-            <Field label={t("subscriptions.level.UNIT")}>
-              <Select value={fUnit} disabled={!ministryId || searching} onChange={(e) => setFUnit(e.target.value)}>
-                <option value="">{t("users.allFem")}</option>
-                {(org?.units ?? []).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
-              </Select>
-            </Field>
-            <Field label={t("users.colRole")}>
-              <Select value={fRole} onChange={(e) => setFRole(e.target.value)}>
-                <option value="">{t("users.all")}</option>
-                {ROLES.map((r) => <option key={r} value={r}>{t(`responsables.role.${r}`)}</option>)}
-              </Select>
-            </Field>
-          </div>
+          {view === "unattached" ? (
+            <>
+              <div style={{ display: "flex", gap: 12, padding: "12px 16px", flexWrap: "wrap", borderBottom: "1px solid var(--line,#eee)" }}>
+                <Field label={t("users.colStatus")}>
+                  <Select value={uActive} onChange={(e) => setUActive(e.target.value as "" | "true" | "false")}>
+                    <option value="">{t("users.all")}</option>
+                    <option value="true">{t("users.active")}</option>
+                    <option value="false">{t("users.inactive")}</option>
+                  </Select>
+                </Field>
+              </div>
+              <div style={{ padding: "10px 16px", borderBottom: "1px solid var(--line,#eee)", color: "var(--ink-400)", fontSize: 12.5 }}>
+                {t("users.unattachedHint")}
+              </div>
+            </>
+          ) : (
+            <div style={{ display: "flex", gap: 12, padding: "12px 16px", flexWrap: "wrap", borderBottom: "1px solid var(--line,#eee)" }}>
+              <Field label={t("users.search")} hint={searching ? t("users.searchScopeHint") : undefined}>
+                <Input placeholder={t("users.searchPlaceholder")} value={search} onChange={(e) => setSearch(e.target.value)} />
+              </Field>
+              {/* Filtres géographiques : ils ont besoin de la structure d'UN ministère. */}
+              <Field label={t("subscriptions.level.COUNTRY")}>
+                <Select value={fCountry} disabled={!ministryId || searching}
+                  onChange={(e) => { setFCountry(e.target.value); setFZone(""); setFUnit(""); }}>
+                  <option value="">{t("users.all")}</option>
+                  {(org?.countries ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </Select>
+              </Field>
+              <Field label={t("subscriptions.level.ZONE")}>
+                <Select value={fZone} disabled={!ministryId || searching} onChange={(e) => { setFZone(e.target.value); setFUnit(""); }}>
+                  <option value="">{t("users.allFem")}</option>
+                  {(org?.zones ?? [])
+                    .filter((z) => !fCountry || z.countryId === fCountry)
+                    .map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
+                </Select>
+              </Field>
+              <Field label={t("subscriptions.level.UNIT")}>
+                <Select value={fUnit} disabled={!ministryId || searching} onChange={(e) => setFUnit(e.target.value)}>
+                  <option value="">{t("users.allFem")}</option>
+                  {(org?.units ?? []).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                </Select>
+              </Field>
+              <Field label={t("users.colRole")}>
+                <Select value={fRole} onChange={(e) => setFRole(e.target.value)}>
+                  <option value="">{t("users.all")}</option>
+                  {ROLES.map((r) => <option key={r} value={r}>{t(`responsables.role.${r}`)}</option>)}
+                </Select>
+              </Field>
+            </div>
+          )}
 
           {/* Compteur de soumission sur TOUT le périmètre filtré (RG-BQ-06), pas sur la page. */}
-          {submissionQ.data && submissionQ.data.total > 0 && (
+          {view === "all" && submissionQ.data && submissionQ.data.total > 0 && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px", borderBottom: "1px solid var(--line,#eee)", background: "var(--parchment,#faf7f0)", flexWrap: "wrap" }}>
               <span style={{ fontWeight: 600, color: "var(--ink-600)" }}>
                 {t("users.submissionCounter", { submitted: submissionQ.data.submitted, total: submissionQ.data.total })}
@@ -476,11 +634,15 @@ export default function UtilisateursPage() {
             </div>
           )}
 
-          {usersQ.isLoading ? (
+          {listQ.isLoading ? (
             <div style={{ padding: 24, color: "var(--ink-500)" }}>{t("common.loading")}</div>
+          ) : listQ.isError ? (
+            <div style={{ padding: 24, color: "var(--ink-500)" }}>
+              {listQ.error instanceof Error ? listQ.error.message : t("common.error")}
+            </div>
           ) : (
             <>
-              <Table columns={cols} rows={rows} zebra />
+              <Table columns={view === "all" ? cols : unattachedCols} rows={rows} zebra />
               <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderTop: "1px solid var(--line,#eee)", flexWrap: "wrap" }}>
                 <span style={{ color: "var(--ink-500)", fontSize: 13 }}>
                   {t("users.pageRange", { first: firstShown, last: lastShown, total })}
@@ -489,14 +651,14 @@ export default function UtilisateursPage() {
                   {PAGE_SIZES.map((n) => <option key={n} value={n}>{t("users.perPage", { count: n })}</option>)}
                 </Select>
                 <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
-                  <Button variant="ghost" size="sm" disabled={page === 0 || usersQ.isFetching}
+                  <Button variant="ghost" size="sm" disabled={page === 0 || listQ.isFetching}
                     onClick={() => setPage((p) => Math.max(0, p - 1))}>
                     {t("users.prevPage")}
                   </Button>
                   <span style={{ color: "var(--ink-500)", fontSize: 13 }}>
                     {t("users.pageOf", { page: totalPages === 0 ? 0 : page + 1, pages: totalPages })}
                   </span>
-                  <Button variant="ghost" size="sm" disabled={page + 1 >= totalPages || usersQ.isFetching}
+                  <Button variant="ghost" size="sm" disabled={page + 1 >= totalPages || listQ.isFetching}
                     onClick={() => setPage((p) => p + 1)}>
                     {t("users.nextPage")}
                   </Button>
@@ -642,7 +804,7 @@ export default function UtilisateursPage() {
         </div>
       </Modal>
 
-      {/* Engagements personnels (consultation + déverrouillage) */}
+      {/* Engagements personnels : consulter · déverrouiller (RG-BQ-08) · corriger (palier G4) */}
       <Modal open={!!goalsUser} onClose={() => setGoalsUser(null)} title={t("users.goalsTitle")}
         sub={goalsUser ? `${goalsUser.fullName} · ${userLogin(goalsUser)}` : undefined}
         footer={
@@ -656,6 +818,20 @@ export default function UtilisateursPage() {
           </>
         }>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {/* Sélecteur d'année : il pilote À LA FOIS la liste affichée et l'année corrigée — les
+              dissocier ferait corriger une année qu'on ne regarde pas. */}
+          {activeGoal && activeGoal.visibleYears.length > 1 && (
+            <Field label={t("users.goalsYearLabel")}>
+              <Select value={String(shownYear ?? "")} onChange={(e) => setGoalsYear(Number(e.target.value))}>
+                {activeGoal.visibleYears.map((y) => (
+                  <option key={y} value={y}>
+                    {activeGoal.openYears.includes(y) ? String(y) : t("users.yearClosedOption", { year: y })}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          )}
+
           {goalsQ.isLoading ? (
             <p style={{ margin: 0, color: "var(--ink-500)" }}>{t("common.loading")}</p>
           ) : goalsQ.isError ? (
@@ -678,10 +854,15 @@ export default function UtilisateursPage() {
                     <span style={{ color: "var(--ink-600)" }}>
                       {p.targetAmount ?? p.targetCount ?? "—"}
                     </span>
-                    <span style={{ marginLeft: "auto" }}>
+                    <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
                       {p.locked
                         ? <Badge tone="gray" dot>{t("users.pledgeLocked")}</Badge>
                         : <Badge tone="ok" dot>{t("users.pledgeOpen")}</Badge>}
+                      {/* Corriger aboutit MÊME verrouillé : le bouton reste offert dans les deux cas. */}
+                      <Button variant="ghost" size="sm"
+                        onClick={() => startCorrection(p.categoryId, p.targetAmount ?? p.targetCount)}>
+                        {t("users.correctAction")}
+                      </Button>
                     </span>
                   </div>
                 ))}
@@ -690,6 +871,51 @@ export default function UtilisateursPage() {
                 <p style={{ margin: 0, fontSize: 12.5, color: "var(--ink-400)" }}>{t("users.unlockHint")}</p>
               )}
             </>
+          )}
+
+          {/* ---- Correction par le back-office (palier G4) ---- */}
+          {!targetHasAssembly ? (
+            // NO_ASSEMBLY_ATTACHMENT (422) serait la seule réponse possible : le dire avant.
+            <p style={{ margin: 0, fontSize: 12.5, color: "var(--earth-700, #8a5a2b)" }}>{t("users.correctNeedsAssembly")}</p>
+          ) : activeGoalQ.isError ? (
+            <p style={{ margin: 0, fontSize: 12.5, color: "var(--ink-500)" }}>
+              {activeGoalQ.error instanceof Error ? activeGoalQ.error.message : t("common.error")}
+            </p>
+          ) : !corrOpen ? (
+            <div>
+              <Button variant="secondary" size="sm" onClick={() => { setCorrCategoryId(""); setCorrValue(""); setCorrOpen(true); }}>
+                {t("users.correctOpen")}
+              </Button>
+            </div>
+          ) : (
+            <div className="card" style={{ padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+              <div style={{ fontWeight: 600 }}>{t("users.correctTitle")}</div>
+              <Field label={t("users.correctCategory")}>
+                <Select value={corrCategoryId} onChange={(e) => setCorrCategoryId(e.target.value)}>
+                  <option value="">{t("common.choose")}</option>
+                  {goalCategories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </Select>
+              </Field>
+              <Field
+                label={corrCategory?.unitType === "COUNT" ? t("users.correctCount") : t("users.correctAmount")}
+                hint={corrCategory?.unitLabel ?? undefined}>
+                <Input type="number" min={0} value={corrValue} onChange={(e) => setCorrValue(e.target.value)} />
+              </Field>
+              {/* YEAR_NOT_OPEN (422) n'est contournable par personne : rouvrir l'année d'abord. */}
+              {!yearOpen && (
+                <p style={{ margin: 0, fontSize: 12.5, color: "var(--earth-700, #8a5a2b)" }}>
+                  {t("users.correctYearClosed", { year: shownYear })}
+                </p>
+              )}
+              <p style={{ margin: 0, fontSize: 12.5, color: "var(--ink-400)" }}>{t("users.correctHint")}</p>
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                <Button variant="ghost" size="sm" onClick={() => setCorrOpen(false)}>{t("common.cancel")}</Button>
+                <Button variant="primary" size="sm" disabled={!corrValid || correctM.isPending}
+                  onClick={() => correctM.mutate()}>
+                  {correctM.isPending ? t("common.loading") : t("users.correctConfirm")}
+                </Button>
+              </div>
+            </div>
           )}
         </div>
       </Modal>
