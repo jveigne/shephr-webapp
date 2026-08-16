@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Badge, Field, Input, Pagination, Select, Table, TopBar } from "@/components/primitives";
@@ -80,6 +80,44 @@ export default function AuditPage() {
     queryFn: () => fetchMinistryStructure(histMinistryId),
   });
   const org = structureQ.data;
+
+  // ---- Cascade nation → région → ville -------------------------------------------------------
+  // Une région porte son `countryId`, une VILLE non (cf. `LocalityRow`) : sa nation se dérive de sa
+  // région. Sans cette dérivation, choisir une nation laissait le sélecteur lister les villes de
+  // TOUTES les nations ; en choisir une envoyait `countryId=A` + `localityId=(ville de B)`, que le
+  // backend combine en ET → une liste vide permanente, présentée comme un résultat. Les régions,
+  // elles, étaient déjà filtrées par nation : c'est l'asymétrie qui était le bug.
+  const zoneCountryById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const z of org?.zones ?? []) m.set(z.id, z.countryId);
+    return m;
+  }, [org?.zones]);
+
+  const visibleZones = useMemo(
+    () => (org?.zones ?? []).filter((z) => !fCountry || z.countryId === fCountry),
+    [org?.zones, fCountry],
+  );
+
+  const visibleCities = useMemo(
+    () => (org?.localities ?? []).filter((l) => {
+      if (fZone) return l.zoneId === fZone;
+      // Une ville sans région ne peut être rattachée à aucune nation : on la masque dès qu'une
+      // nation est choisie, exactement comme le backend l'exclut d'un filtre nation/région.
+      if (fCountry) return !!l.zoneId && zoneCountryById.get(l.zoneId) === fCountry;
+      return true;
+    }),
+    [org?.localities, fZone, fCountry, zoneCountryById],
+  );
+
+  // Filet de sécurité : les `onChange` réinitialisent déjà les niveaux inférieurs, mais la structure
+  // arrive de façon asynchrone (et peut être rechargée). Si une sélection n'est plus dans sa liste,
+  // on la vide plutôt que de laisser un `<Select>` afficher une option et l'état en envoyer une
+  // autre. Uniquement une fois la structure chargée, sinon on effacerait un choix légitime.
+  useEffect(() => {
+    if (!org) return;
+    if (fZone && !visibleZones.some((z) => z.id === fZone)) { setFZone(""); return; }
+    if (fCity && !visibleCities.some((l) => l.id === fCity)) setFCity("");
+  }, [org, fZone, fCity, visibleZones, visibleCities]);
 
   // Un seul jeu de filtres pour les deux onglets. ⚠ Sur l'onglet « changements », ils portent sur
   // l'assemblée d'ARRIVÉE : « les changements de ma région » = les gens qui y sont arrivés.
@@ -246,20 +284,26 @@ export default function AuditPage() {
             <Field label={t("subscriptions.level.ZONE")}>
               <Select value={fZone} onChange={(e) => { setFZone(e.target.value); setFCity(""); }}>
                 <option value="">{t("audit.allRegions")}</option>
-                {(org?.zones ?? [])
-                  .filter((z) => !fCountry || z.countryId === fCountry)
-                  .map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
+                {visibleZones.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
               </Select>
             </Field>
             <Field label={t("subscriptions.level.LOCALITY")}>
               <Select value={fCity} onChange={(e) => setFCity(e.target.value)}>
                 <option value="">{t("audit.allCities")}</option>
-                {(org?.localities ?? [])
-                  .filter((l) => !fZone || l.zoneId === fZone)
-                  .map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+                {visibleCities.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
               </Select>
             </Field>
           </div>
+
+          {/* Si le RÉFÉRENTIEL de structure n'a pas pu être lu, les trois sélecteurs ci-dessus se
+              réduisent à « toutes les nations / régions / villes » — un refus qui se lirait comme
+              « ce ministère n'a pas de structure ». On montre le motif renvoyé par le backend au
+              lieu de laisser des listes vides passer pour une donnée. */}
+          {structureQ.isError && (
+            <div style={{ padding: "10px 16px", borderBottom: "1px solid var(--line,#eee)", color: "var(--err)", fontSize: 12.5 }}>
+              {structureQ.error instanceof Error ? structureQ.error.message : t("common.error")}
+            </div>
+          )}
 
           <div style={{ padding: "10px 16px", borderBottom: "1px solid var(--line,#eee)", color: "var(--ink-400)", fontSize: 12.5 }}>
             {/* Deux pièges de lecture, écrits à l'écran plutôt que découverts. */}
