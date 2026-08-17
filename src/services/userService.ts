@@ -5,6 +5,7 @@ export type ModuleRole =
   | "MEMBRE" | "DIRIGEANT_UNITE" | "DIRIGEANT" | "DIRIGEANT_SENIOR"
   | "DIRIGEANT_COORDINATEUR" | "LEADER" | "SECRETARIAT";
 
+/** Mirrors com.excellence.back.auth.admin.user.dto.AdminUserResponse */
 export interface AdminUserResponse {
   id: string;
   /** Email de CONTACT — facultatif : les comptes Shephr sont créés sur `username`. */
@@ -33,6 +34,15 @@ export interface AdminUserResponse {
   goalCityIds: string[];
   goalZoneIds: string[];
   coordinatedCountryIds: string[];
+  /**
+   * A-t-elle soumis SES engagements pour l'année courante ? (RG-BQ-06)
+   *
+   * `true` soumis · `false` pas encore · `null` = **uniquement** compte sans `goalUnitId` ou
+   * `superAdmin`. ⚠ `null` ne signifie plus « ce rôle n'a rien à déclarer » : depuis RG-BQ-11 tout
+   * compte rattaché déclare personnellement, DIRIGEANT de ville / SENIOR / COORDINATEUR /
+   * SECRETARIAT compris. Ne jamais afficher « non applicable » attaché à un rôle.
+   */
+  goalSubmitted: boolean | null;
   active: boolean;
   createdAt: string;
   updatedAt: string | null;
@@ -159,6 +169,55 @@ export function searchUsers(q: UserQuery): Promise<UserPage> {
   return apiFetch<UserPage>(`/api/church/admin/users?${p.toString()}`);
 }
 
+/**
+ * Comptes du module Objectifs SANS assemblée de rattachement (palier G5, RG-BQ-03).
+ *
+ * <p>Prédicat serveur : `goalRole != null` ET `goalUnitId == null` ET `superAdmin == false`. Un
+ * compte purement Dons n'y figure donc pas, un administrateur plateforme non plus. C'est une liste
+ * de TRAVAIL — on l'épuise —, d'où le tri serveur par nom (et non par date d'inscription comme
+ * l'annuaire).
+ *
+ * <p>⚠ `goalSubmitted` vaut toujours `null` sur ces lignes (la requête d'engagements n'est pas
+ * lancée) : ne pas y afficher la colonne « Engagement soumis ».
+ *
+ * <p>Garde serveur : superAdmin, ou SECRETARIAT **Objectifs** de son propre ministère — un
+ * secrétariat Dons est refusé ici alors qu'il voit les historiques de structure.
+ */
+export function listUnattachedUsers(q: { ministryId?: string; active?: boolean; page?: number; size?: number }): Promise<UserPage> {
+  const p = new URLSearchParams();
+  if (q.ministryId) p.set("ministryId", q.ministryId);
+  if (q.active !== undefined) p.set("active", String(q.active));
+  p.set("page", String(q.page ?? 0));
+  p.set("size", String(q.size ?? 25));
+  return apiFetch<UserPage>(`/api/church/admin/users/unattached?${p.toString()}`);
+}
+
+/** Mirrors com.excellence.back.auth.admin.user.dto.GoalSubmissionSummaryResponse */
+export interface GoalSubmissionSummary {
+  submitted: number;
+  total: number;
+}
+
+/**
+ * Compteur « X / Y ont soumis leur engagement », calculé sur TOUT le périmètre filtré et non sur la
+ * page affichée : la liste est paginée côté serveur, décompter les 25 lignes visibles donnerait un
+ * chiffre faux. Prend exactement les mêmes filtres que {@link searchUsers} (hors pagination).
+ *
+ * `total` ne compte que les comptes CONCERNÉS (`goalSubmitted != null`), c'est-à-dire rattachés à
+ * une assemblée et non `superAdmin` — RG-BQ-06.
+ */
+export function fetchGoalSubmissionSummary(q: UserQuery): Promise<GoalSubmissionSummary> {
+  const p = new URLSearchParams();
+  if (q.ministryId) p.set("ministryId", q.ministryId);
+  if (q.search?.trim()) p.set("search", q.search.trim());
+  if (q.placeNodeId) p.set("placeNodeId", q.placeNodeId);
+  if (q.role) p.set("role", q.role);
+  if (q.active !== undefined) p.set("active", String(q.active));
+  return apiFetch<GoalSubmissionSummary>(
+    `/api/church/admin/users/goal-submission-summary?${p.toString()}`,
+  );
+}
+
 export function inviteUser(body: InviteUserRequest): Promise<InviteUserResponse> {
   return apiFetch<InviteUserResponse>("/api/church/admin/users/invite", {
     method: "POST",
@@ -177,11 +236,23 @@ export function deactivateUser(id: string): Promise<AdminUserResponse> {
   return apiFetch<AdminUserResponse>(`/api/church/admin/users/${id}/deactivate`, { method: "POST" });
 }
 
+/** Mirrors com.excellence.back.auth.admin.user.dto.ReassignUserRequest */
 export interface ReassignUserRequest {
   goalRole: ModuleRole;
+  /** Entité DIRIGÉE (assemblée / ville / région / nation). */
   entityId?: string | null;
   /** Multi-rattachements (villes d'un DIRIGEANT, régions d'un SENIOR) : la première est la principale. */
   entityIds?: string[];
+  /**
+   * Assemblée de rattachement **PERSONNEL** (RG-BQ-03) — celle où la personne déclare SES propres
+   * engagements, distincte de l'entité qu'elle dirige. Omis, le rattachement actuel est CONSERVÉ
+   * (il n'est plus vidé avec les rattachements de direction). Pour `MEMBRE` et `DIRIGEANT_UNITE`,
+   * c'est `entityId` qui le porte — ne pas doubler le champ.
+   *
+   * ⚠ Un compte portant un `goalRole` sans assemblée est refusé : `GOAL_UNIT_REQUIRED` (422).
+   * Le changer déclenche la garde RG-BQ-09 côté serveur (`superAdmin` ou SECRETARIAT du ministère).
+   */
+  goalUnitId?: string;
   supervisorId?: string | null;
 }
 

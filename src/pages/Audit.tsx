@@ -1,15 +1,21 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Badge, Input, Pagination, Select, Table, TopBar } from "@/components/primitives";
+import { Badge, Field, Input, Pagination, Select, Table, TopBar } from "@/components/primitives";
 import { getDashboard, listAuditLogs, type AuditLogResponse } from "@/services/auditService";
-import { listAssemblyHistory, type AssemblyCreationRow } from "@/services/orgService";
+import {
+  fetchMinistryStructure, listAssemblyChanges, listAssemblyHistory,
+  type AssemblyChangeRow, type AssemblyCreationRow,
+} from "@/services/orgService";
 import { listMinistries, type MinistryResponse } from "@/services/ministryService";
 
 const ACTIONS = ["", "SUBSCRIPTION_CREATED", "SUBSCRIPTION_SUSPENDED", "MODULE_UPDATED"];
 
 /** Palier C4 : 25 lignes par page, comme la liste des comptes — une page qui tient à l'écran. */
 const HISTORY_PAGE_SIZE = 25;
+
+/** Les deux journaux de structure : ce qui a été CRÉÉ, et qui a BOUGÉ. Mêmes filtres, même garde. */
+type HistoryTab = "creations" | "changes";
 
 function fmtDateTime(iso: string, locale: string): string {
   const d = new Date(iso);
@@ -39,8 +45,13 @@ export default function AuditPage() {
   const dateLocale = (i18n.resolvedLanguage || i18n.language) === "en" ? "en-GB" : "fr-FR";
   const [action, setAction] = useState("");
   const [actorEmail, setActorEmail] = useState("");
-  // Historique des créations d'assemblées (palier C4) : filtre ministère + pagination serveur.
+  // Historiques de structure : filtres géographiques en cascade + pagination serveur, PARTAGÉS par
+  // les deux onglets — le backend prend exactement les mêmes paramètres des deux côtés.
+  const [tab, setTab] = useState<HistoryTab>("creations");
   const [histMinistryId, setHistMinistryId] = useState("");
+  const [fCountry, setFCountry] = useState("");
+  const [fZone, setFZone] = useState("");
+  const [fCity, setFCity] = useState("");
   const [histPage, setHistPage] = useState(0);
 
   const actionLabel = (a: string) => i18n.exists(`audit.actions.${a}`) ? t(`audit.actions.${a}`) : a;
@@ -61,21 +72,82 @@ export default function AuditPage() {
 
   const ministriesQ = useQuery({ queryKey: ["ministries"], queryFn: listMinistries });
 
-  const historyQ = useQuery({
-    queryKey: ["assembly-history", histMinistryId, histPage],
-    queryFn: () => listAssemblyHistory({
-      ministryId: histMinistryId || undefined,
-      page: histPage,
-      size: HISTORY_PAGE_SIZE,
+  // Les DTO d'historique ne portent que des NOMS de lieu (créations) ou des ids figés au moment du
+  // déplacement (changements) : les sélecteurs doivent tirer leurs ids du référentiel de structure,
+  // ouvert à tout membre du ministère depuis RG-BQ-12. Même clé de cache que la page Utilisateurs.
+  const structureQ = useQuery({
+    queryKey: ["ministry-structure", histMinistryId],
+    queryFn: () => fetchMinistryStructure(histMinistryId),
+  });
+  const org = structureQ.data;
+
+  // ---- Cascade nation → région → ville -------------------------------------------------------
+  // Une région porte son `countryId`, une VILLE non (cf. `LocalityRow`) : sa nation se dérive de sa
+  // région. Sans cette dérivation, choisir une nation laissait le sélecteur lister les villes de
+  // TOUTES les nations ; en choisir une envoyait `countryId=A` + `localityId=(ville de B)`, que le
+  // backend combine en ET → une liste vide permanente, présentée comme un résultat. Les régions,
+  // elles, étaient déjà filtrées par nation : c'est l'asymétrie qui était le bug.
+  const zoneCountryById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const z of org?.zones ?? []) m.set(z.id, z.countryId);
+    return m;
+  }, [org?.zones]);
+
+  const visibleZones = useMemo(
+    () => (org?.zones ?? []).filter((z) => !fCountry || z.countryId === fCountry),
+    [org?.zones, fCountry],
+  );
+
+  const visibleCities = useMemo(
+    () => (org?.localities ?? []).filter((l) => {
+      if (fZone) return l.zoneId === fZone;
+      // Une ville sans région ne peut être rattachée à aucune nation : on la masque dès qu'une
+      // nation est choisie, exactement comme le backend l'exclut d'un filtre nation/région.
+      if (fCountry) return !!l.zoneId && zoneCountryById.get(l.zoneId) === fCountry;
+      return true;
     }),
+    [org?.localities, fZone, fCountry, zoneCountryById],
+  );
+
+  // Filet de sécurité : les `onChange` réinitialisent déjà les niveaux inférieurs, mais la structure
+  // arrive de façon asynchrone (et peut être rechargée). Si une sélection n'est plus dans sa liste,
+  // on la vide plutôt que de laisser un `<Select>` afficher une option et l'état en envoyer une
+  // autre. Uniquement une fois la structure chargée, sinon on effacerait un choix légitime.
+  useEffect(() => {
+    if (!org) return;
+    if (fZone && !visibleZones.some((z) => z.id === fZone)) { setFZone(""); return; }
+    if (fCity && !visibleCities.some((l) => l.id === fCity)) setFCity("");
+  }, [org, fZone, fCity, visibleZones, visibleCities]);
+
+  // Un seul jeu de filtres pour les deux onglets. ⚠ Sur l'onglet « changements », ils portent sur
+  // l'assemblée d'ARRIVÉE : « les changements de ma région » = les gens qui y sont arrivés.
+  const histFilters = {
+    ministryId: histMinistryId || undefined,
+    countryId: fCountry || undefined,
+    zoneId: fZone || undefined,
+    localityId: fCity || undefined,
+    size: HISTORY_PAGE_SIZE,
+  };
+
+  const creationsQ = useQuery({
+    queryKey: ["assembly-history", histMinistryId, fCountry, fZone, fCity, histPage],
+    queryFn: () => listAssemblyHistory({ ...histFilters, page: histPage }),
+    enabled: tab === "creations",
     placeholderData: (prev) => prev, // pagination sans clignotement
   });
 
-  // Retour en première page au changement de ministère : rester page 4 sur un résultat d'une page
-  // afficherait une liste vide.
-  useEffect(() => { setHistPage(0); }, [histMinistryId]);
+  const changesQ = useQuery({
+    queryKey: ["assembly-changes", histMinistryId, fCountry, fZone, fCity, histPage],
+    queryFn: () => listAssemblyChanges({ ...histFilters, page: histPage }),
+    enabled: tab === "changes",
+    placeholderData: (prev) => prev,
+  });
 
-  const histCols = [
+  // Retour en première page dès qu'un critère ou l'onglet change : rester page 4 sur un résultat
+  // d'une page afficherait une liste vide.
+  useEffect(() => { setHistPage(0); }, [histMinistryId, fCountry, fZone, fCity, tab]);
+
+  const creationCols = [
     { label: t("audit.colAssembly"), render: (r: AssemblyCreationRow) => <span style={{ fontWeight: 500 }}>{r.name}</span> },
     { label: t("audit.colCity"), render: (r: AssemblyCreationRow) => <span style={{ color: "var(--ink-600)" }}>{r.cityName ?? "—"}</span> },
     { label: t("audit.colRegion"), render: (r: AssemblyCreationRow) => <span style={{ color: "var(--ink-600)" }}>{r.regionName ?? "—"}</span> },
@@ -97,9 +169,51 @@ export default function AuditPage() {
     { label: t("audit.colDate"), render: (r: AssemblyCreationRow) => <span style={{ color: "var(--ink-500)" }}>{fmtDate(r.createdAt, dateLocale)}</span> },
   ];
 
-  const histRows = (historyQ.data?.content ?? []).map((r) => ({ ...r, _key: r.unitId }));
-  const histTotal = historyQ.data?.totalElements ?? 0;
-  const histPageCount = historyQ.data?.totalPages ?? 0;
+  const changeCols = [
+    {
+      label: t("audit.colPerson"),
+      // userName null = compte supprimé depuis : la ligne d'historique, elle, survit.
+      render: (r: AssemblyChangeRow) => (
+        <span style={{ fontWeight: 500 }}>{r.userName ?? t("audit.deletedAccount")}</span>
+      ),
+    },
+    {
+      label: t("audit.colFrom"),
+      // fromUnitName null = premier rattachement (la personne n'était nulle part).
+      render: (r: AssemblyChangeRow) => (
+        r.fromUnitName
+          ? <span style={{ color: "var(--ink-600)" }}>{r.fromUnitName}</span>
+          : <span style={{ color: "var(--ink-400)" }} title={t("audit.firstAttachmentHint")}>—</span>
+      ),
+    },
+    { label: t("audit.colTo"), render: (r: AssemblyChangeRow) => <span style={{ color: "var(--ink-700)", fontWeight: 500 }}>{r.toUnitName ?? "—"}</span> },
+    {
+      label: t("audit.colPlace"),
+      // Lieu de l'assemblée d'ARRIVÉE, figé au moment du déplacement.
+      render: (r: AssemblyChangeRow) => (
+        <span style={{ color: "var(--ink-500)" }}>
+          {[r.cityName, r.regionName, r.nationName].filter(Boolean).join(" · ") || "—"}
+        </span>
+      ),
+    },
+    {
+      label: t("audit.colChangedBy"),
+      render: (r: AssemblyChangeRow) => (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span>{r.changedByName ?? "—"}</span>
+          <Badge tone={r.source === "SELF" ? "gray" : "earth"}>{t(`audit.source.${r.source}`)}</Badge>
+        </div>
+      ),
+    },
+    { label: t("audit.colDate"), render: (r: AssemblyChangeRow) => <span style={{ color: "var(--ink-500)" }}>{fmtDateTime(r.changedAt, dateLocale)}</span> },
+  ];
+
+  const activeQ = tab === "creations" ? creationsQ : changesQ;
+  const creationRows = (creationsQ.data?.content ?? []).map((r) => ({ ...r, _key: r.unitId }));
+  const changeRows = (changesQ.data?.content ?? []).map((r) => ({ ...r, _key: r.id }));
+  const histCount = tab === "creations" ? creationRows.length : changeRows.length;
+  const histTotal = activeQ.data?.totalElements ?? 0;
+  const histPageCount = activeQ.data?.totalPages ?? 0;
 
   const rows = logsQ.data ?? [];
   const d = dashQ.data;
@@ -133,28 +247,84 @@ export default function AuditPage() {
           )}
         </div>
 
-        {/* Palier C4 — historique des créations d'assemblées, section distincte du journal d'audit :
-            ce ne sont pas des actions sensibles de plateforme mais un suivi de terrain. */}
+        {/* Historiques de STRUCTURE, section distincte du journal d'audit : ce ne sont pas des
+            actions sensibles de plateforme mais un suivi de terrain. Deux onglets, un seul jeu de
+            filtres — les deux endpoints prennent exactement les mêmes paramètres. */}
         <div className="card" style={{ padding: 0, marginTop: 18 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderBottom: "1px solid var(--line,#eee)", flexWrap: "wrap" }}>
-            <span style={{ fontWeight: 600 }}>{t("audit.assemblyHistoryTitle")}</span>
-            {/* Vide = TOUS les ministères ; le backend restreint de lui-même un acteur non SUPER_ADMIN. */}
-            <Select value={histMinistryId} onChange={(e) => setHistMinistryId(e.target.value)}>
-              <option value="">{t("audit.allMinistries")}</option>
-              {(ministriesQ.data ?? []).map((m: MinistryResponse) => <option key={m.id} value={m.id}>{m.name}</option>)}
-            </Select>
-          </div>
-          {historyQ.isLoading ? (
-            <div style={{ padding: 24, color: "var(--ink-500)" }}>{t("common.loading")}</div>
-          ) : historyQ.isError ? (
-            <div style={{ padding: 24, color: "var(--ink-500)" }}>
-              {historyQ.error instanceof Error ? historyQ.error.message : t("common.error")}
+          {/* Pas de bordure basse ici : `.tabs` porte déjà la sienne (sinon double filet). */}
+          <div style={{ padding: "12px 16px 0" }}>
+            <div style={{ fontWeight: 600, marginBottom: 10 }}>{t("audit.structureHistoryTitle")}</div>
+            <div className="tabs" style={{ marginBottom: 0 }}>
+              <button className={`tab ${tab === "creations" ? "active" : ""}`} onClick={() => setTab("creations")}>
+                {t("audit.tabCreations")}
+              </button>
+              <button className={`tab ${tab === "changes" ? "active" : ""}`} onClick={() => setTab("changes")}>
+                {t("audit.tabChanges")}
+              </button>
             </div>
-          ) : histRows.length === 0 ? (
-            <div style={{ padding: 24, color: "var(--ink-500)" }}>{t("audit.assemblyHistoryEmpty")}</div>
+          </div>
+
+          <div style={{ display: "flex", gap: 12, padding: "12px 16px", flexWrap: "wrap", borderBottom: "1px solid var(--line,#eee)" }}>
+            {/* Vide = TOUS les ministères ; le backend restreint de lui-même un acteur non SUPER_ADMIN
+                (et refuse en 403 un ministère qui n'est pas le sien — ce n'est pas un repli). */}
+            <Field label={t("subscriptions.level.MINISTRY")}>
+              <Select value={histMinistryId} onChange={(e) => {
+                setHistMinistryId(e.target.value); setFCountry(""); setFZone(""); setFCity("");
+              }}>
+                <option value="">{t("audit.allMinistries")}</option>
+                {(ministriesQ.data ?? []).map((m: MinistryResponse) => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </Select>
+            </Field>
+            <Field label={t("subscriptions.level.COUNTRY")}>
+              <Select value={fCountry} onChange={(e) => { setFCountry(e.target.value); setFZone(""); setFCity(""); }}>
+                <option value="">{t("audit.allNations")}</option>
+                {(org?.countries ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </Select>
+            </Field>
+            <Field label={t("subscriptions.level.ZONE")}>
+              <Select value={fZone} onChange={(e) => { setFZone(e.target.value); setFCity(""); }}>
+                <option value="">{t("audit.allRegions")}</option>
+                {visibleZones.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
+              </Select>
+            </Field>
+            <Field label={t("subscriptions.level.LOCALITY")}>
+              <Select value={fCity} onChange={(e) => setFCity(e.target.value)}>
+                <option value="">{t("audit.allCities")}</option>
+                {visibleCities.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+              </Select>
+            </Field>
+          </div>
+
+          {/* Si le RÉFÉRENTIEL de structure n'a pas pu être lu, les trois sélecteurs ci-dessus se
+              réduisent à « toutes les nations / régions / villes » — un refus qui se lirait comme
+              « ce ministère n'a pas de structure ». On montre le motif renvoyé par le backend au
+              lieu de laisser des listes vides passer pour une donnée. */}
+          {structureQ.isError && (
+            <div style={{ padding: "10px 16px", borderBottom: "1px solid var(--line,#eee)", color: "var(--err)", fontSize: 12.5 }}>
+              {structureQ.error instanceof Error ? structureQ.error.message : t("common.error")}
+            </div>
+          )}
+
+          <div style={{ padding: "10px 16px", borderBottom: "1px solid var(--line,#eee)", color: "var(--ink-400)", fontSize: 12.5 }}>
+            {/* Deux pièges de lecture, écrits à l'écran plutôt que découverts. */}
+            {tab === "creations" ? t("audit.creationsScopeHint") : t("audit.changesScopeHint")}
+          </div>
+
+          {activeQ.isLoading ? (
+            <div style={{ padding: 24, color: "var(--ink-500)" }}>{t("common.loading")}</div>
+          ) : activeQ.isError ? (
+            <div style={{ padding: 24, color: "var(--ink-500)" }}>
+              {activeQ.error instanceof Error ? activeQ.error.message : t("common.error")}
+            </div>
+          ) : histCount === 0 ? (
+            <div style={{ padding: 24, color: "var(--ink-500)" }}>
+              {tab === "creations" ? t("audit.assemblyHistoryEmpty") : t("audit.assemblyChangesEmpty")}
+            </div>
           ) : (
             <>
-              <Table columns={histCols} rows={histRows} zebra />
+              {tab === "creations"
+                ? <Table columns={creationCols} rows={creationRows} zebra />
+                : <Table columns={changeCols} rows={changeRows} zebra />}
               <Pagination
                 page={histPage + 1}
                 pageCount={histPageCount}

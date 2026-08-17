@@ -26,13 +26,42 @@ export function isMultiAttachmentRole(role: ModuleRole): boolean {
   return role === "DIRIGEANT_UNITE" || role === "DIRIGEANT" || role === "DIRIGEANT_SENIOR";
 }
 
+/**
+ * Ce rôle exige-t-il de choisir une assemblée de rattachement PERSONNEL à part de l'entité dirigée ?
+ *
+ * <p>RG-BQ-03 : tout compte du module Objectifs déclare ses propres engagements dans une assemblée,
+ * quel que soit son rang — un coordinateur de nation ou un SECRETARIAT y est astreint comme un
+ * membre. Pour `MEMBRE` et `DIRIGEANT_UNITE`, l'entité dirigée EST l'assemblée : le champ ferait
+ * doublon, le backend la déduit de `entityId`. Pour tous les autres, sans ce champ l'écriture part
+ * sans `goalUnitId` et le backend répond `GOAL_UNIT_REQUIRED` (422).
+ */
+export function needsHomeAssembly(role: ModuleRole): boolean {
+  return role !== "MEMBRE" && role !== "DIRIGEANT_UNITE";
+}
+
 // La règle « responsable d'un nœud » (rattachement Objectifs OU Dons, home ou multiple) vit
 // désormais CÔTÉ SERVEUR — endpoints /api/church/admin/users/responsables et /responsable-counts.
 // Elle ne peut plus être évaluée ici : le back-office ne charge plus l'annuaire complet, et une
 // seconde copie de la règle dériverait de la première.
 
-/** Rattachement Goals dérivé du nœud + rôle (les autres modules ne sont pas touchés). */
-export function buildGoalAttachment(level: NodeLevel, nodeId: string, role: ModuleRole) {
+/**
+ * Rattachement Goals dérivé du nœud + rôle (les autres modules ne sont pas touchés).
+ *
+ * <p>Deux rattachements DISTINCTS y cohabitent depuis RG-BQ-03 (16/08) :
+ * <ul>
+ *   <li>l'entité <b>dirigée</b>, dérivée du nœud (`goalCityId`, `goalZoneId`, `goalCountryIds`) ;</li>
+ *   <li>l'assemblée de rattachement <b>personnel</b> (`goalUnitId`), où la personne déclare SES
+ *       propres engagements — obligatoire pour TOUT compte du module Objectifs, coordinateur,
+ *       LEADER et SECRETARIAT compris, sous peine de `GOAL_UNIT_REQUIRED` (422).</li>
+ * </ul>
+ *
+ * <p>Au niveau `UNIT`, le nœud EST l'assemblée personnelle : `homeUnitId` y est superflu et ignoré.
+ * Aux autres niveaux, il faut le passer explicitement — sinon le compte part sans assemblée.
+ *
+ * @param homeUnitId assemblée personnelle ; omis, aucun `goalUnitId` n'est envoyé (le backend
+ *                   conserve alors l'existant sur `reassign`, mais REFUSE une invitation).
+ */
+export function buildGoalAttachment(level: NodeLevel, nodeId: string, role: ModuleRole, homeUnitId?: string) {
   const base: { goalRole: ModuleRole; goalUnitId?: string; goalUnitIds?: string[]; goalCityId?: string; goalZoneId?: string; goalCountryIds?: string[] } = { goalRole: role };
   if (level === "UNIT") {
     base.goalUnitId = nodeId;
@@ -40,7 +69,11 @@ export function buildGoalAttachment(level: NodeLevel, nodeId: string, role: Modu
     // Sans `goalUnitIds`, un rattachement posé ici restait invisible du multi-assemblées.
     // Un MEMBRE, lui, n'appartient qu'à une seule assemblée : on ne lui pose pas de set.
     if (role === "DIRIGEANT_UNITE") base.goalUnitIds = [nodeId];
-  } else if (level === "LOCALITY") {
+    return base;
+  }
+  // Niveaux au-dessus de l'assemblée : le nœud est l'entité DIRIGÉE, l'appartenance se pose à part.
+  if (homeUnitId) base.goalUnitId = homeUnitId;
+  if (level === "LOCALITY") {
     base.goalCityId = nodeId;
   } else if (level === "ZONE") {
     base.goalZoneId = nodeId;

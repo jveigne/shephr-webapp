@@ -65,10 +65,10 @@ src/
 | `/ministeres` | `Ministeres` | liste + **bootstrap** d'un ministère (crée ministère + 1ʳᵉ localité + contact `SECRETARIAT` inactif + lien d'invitation) |
 | `/structure` | `Structure` | arbre org d'un ministère, CRUD 4 niveaux + drawer Responsables |
 | `/demandes` | `Demandes` | validation des demandes de **structure** et de **rattachement** (join requests) |
-| `/utilisateurs` | `Utilisateurs` | annuaire **paginé et filtré côté serveur**, invitation, rôle, réaffectation, mot de passe, suppression |
+| `/utilisateurs` | `Utilisateurs` | deux onglets : annuaire **paginé et filtré côté serveur** (invitation, rôle, réaffectation, engagements + correction, mot de passe, suppression) et **comptes sans assemblée** (liste de travail, rattachement à la ligne) |
 | `/abonnements` | `Abonnements` | catalogue de modules, abonnements par périmètre, **devis (pricing quote)** |
 | `/goals` | `Placeholder` | vue globale des objectifs — **pas encore implémentée** |
-| `/audit` | `Audit` | dashboard de compteurs + journal d'audit |
+| `/audit` | `Audit` | dashboard de compteurs + journal d'audit + **historique de structure** en deux onglets (créations d'assemblées · changements d'assemblée), filtres nation/région/ville en cascade |
 | `/settings` | `Settings` | coordonnées de support (branché) + onglets profil/sécurité (mock) |
 
 Toutes les routes protégées passent par `<Shielded>` = `ProtectedRoute` › `AppShell` › `ErrorBoundary`.
@@ -114,8 +114,9 @@ Un fichier par domaine, chaque interface porte un commentaire `Mirrors com.excel
 | `api.ts` | `API_URL` + `authHeaders()` + `apiFetch<T>()` — toute requête passe par là |
 | `authService.ts` | `POST /api/cmfipraise/auth/login`, `GET /api/church/auth/me` |
 | `ministryService.ts` | `GET /api/org/admin/ministries`, `POST /admin/ministries/bootstrap` |
-| `orgService.ts` | CRUD `/api/org/admin/{continents,countries,zones,localities,units}` + nœuds génériques `/api/org/admin/nodes` (libellé Région/État) |
-| `userService.ts` | `/api/church/admin/users` (liste paginée + `search`/`placeNodeId`/`role`/`active`), `/invite`, `/{id}` PATCH·DELETE, `/deactivate`, `/reassign`, `/set-password`, `/regenerate-invitation`, `/responsables`, `/responsable-counts` |
+| `orgService.ts` | CRUD `/api/org/admin/{continents,countries,zones,localities,units}` + nœuds génériques `/api/org/admin/nodes` (libellé Région/État) + les deux journaux de structure `/api/org/admin/units/history` (créations) et `/units/history/assembly-changes` (changements d'assemblée) |
+| `userService.ts` | `/api/church/admin/users` (liste paginée + `search`/`placeNodeId`/`role`/`active`), `/unattached` (comptes Objectifs sans assemblée), `/goal-submission-summary`, `/invite`, `/{id}` PATCH·DELETE, `/deactivate`, `/reassign`, `/set-password`, `/regenerate-invitation`, `/responsables`, `/responsable-counts` |
+| `goalsService.ts` | `/api/church/goals/active` (catégories + années ouvertes), `/goals/member/{id}/goals`, `/member/{id}/unlock` (rouvrir), `/member/{id}/pledges` (corriger à la place de la personne — n'ôte PAS le verrou) |
 | `subscriptionService.ts` | `/admin/modules`, `/admin/subscriptions` (+ `/deactivate`, `/reactivate`), `/admin/pricing/quote`, lectures org pour les pickers |
 | `structureRequestService.ts` | `/api/church/structure-requests/pending` + `/approve` + `/reject` |
 | `joinRequestService.ts` | `/api/church/join-requests/pending` + `/approve` + `/reject` |
@@ -130,7 +131,7 @@ Un fichier par domaine, chaque interface porte un commentaire `Mirrors com.excel
 
 ### Données serveur
 - **Toujours react-query**, jamais de `useEffect` + `useState` pour un GET (`Settings.tsx` › `ContactSettingsCard` est la seule exception historique).
-- Clés de cache existantes : `["ministries"]`, `["continents"]`, `["ministry-structure", ministryId]`, `["ministry-org", ministryId]`, `["responsable-counts", ministryId]`, `["responsables", nodeId, level]`, `["nation-nodes"]`, `["users-page", …filtres]`, `["user-search", ministryId, q]`, `["modules"]`, `["subscriptions", ministryId]`, `["structure-requests","pending"]`, `["join-requests","pending"]`, `["dashboard"]`, `["audit-logs", …]`.
+- Clés de cache existantes : `["ministries"]`, `["continents"]`, `["ministry-structure", ministryId]`, `["ministry-org", ministryId]`, `["responsable-counts", ministryId]`, `["responsables", nodeId, level]`, `["nation-nodes"]`, `["users-page", …filtres]`, `["user-search", ministryId, q]`, `["modules"]`, `["subscriptions", ministryId]`, `["structure-requests","pending"]`, `["join-requests","pending"]`, `["dashboard"]`, `["audit-logs", …]`, `["users-unattached", ministryId, active, page, size]`, `["goal-submission-summary", …filtres]`, `["member-goals", userId, year]`, `["active-goal"]`, `["assembly-history", …filtres, page]`, `["assembly-changes", …filtres, page]`.
 - Après mutation : `qc.invalidateQueries` sur **toutes** les clés impactées (une modification de responsable invalide `responsables`, `responsable-counts`, `users-page` **et** `user-search`).
 - Erreurs : `apiFetch` relève un `Error` dont le message vient de `body.message ?? body.detail ?? HTTP <status>`. Le pattern d'affichage est `onError: (e) => push({ kind: "error", title: t("common.failure"), msg: e instanceof Error ? e.message : t("common.error") })`.
 

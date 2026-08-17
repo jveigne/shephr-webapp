@@ -7,7 +7,7 @@ import { Icons } from "./icons";
 import { useToasts } from "@/context/ToastContext";
 import { invitationLink } from "@/services/ministryService";
 import type { NodeLevel, TreeNode } from "@/lib/orgTree";
-import { RESP_ROLES_BY_LEVEL, buildGoalAttachment, isMultiAttachmentRole } from "@/lib/responsables";
+import { RESP_ROLES_BY_LEVEL, buildGoalAttachment, isMultiAttachmentRole, needsHomeAssembly } from "@/lib/responsables";
 import { EntityMultiPicker } from "./EntityMultiPicker";
 import {
   deactivateUser, inviteUser, listResponsables, reassignUser, regenerateInvitation, userLogin,
@@ -58,6 +58,12 @@ export function ResponsablesDrawer({
   const [editEntity, setEditEntity] = useState("");
   /** Palier A2 — cibles multiples pour les rôles à SET (assemblées / villes / régions), ★ = principale. */
   const [editEntities, setEditEntities] = useState<string[]>([]);
+  /**
+   * Assemblée de rattachement PERSONNEL (RG-BQ-03) — où la personne déclare SES engagements, à ne
+   * pas confondre avec le nœud qu'elle dirige. Nommer un SECRETARIAT ou un coordinateur sans elle
+   * fait échouer l'écriture (`GOAL_UNIT_REQUIRED`, 422).
+   */
+  const [homeUnit, setHomeUnit] = useState("");
   // Codes d'invitation conservés sur les cartes (le backend ne les réexpose pas après coup).
   const [invites, setInvites] = useState<Record<string, { code: string | null; token: string }>>({});
 
@@ -92,6 +98,7 @@ export function ResponsablesDrawer({
   const closeForm = () => {
     setForm(null); setFullName(""); setEmail(""); setRole(""); setEditEntity(""); setEditEntities([]);
     setSupervisorId(""); setSupervisorRef(undefined); setAssignUserId(""); setAssignUser(undefined);
+    setHomeUnit("");
   };
 
   /**
@@ -112,20 +119,23 @@ export function ResponsablesDrawer({
 
   const openAdd = () => {
     setFullName(""); setEmail(""); setRole(addRoleOptions[0] ?? "");
-    setSupervisorId(""); setSupervisorRef(undefined);
+    setSupervisorId(""); setSupervisorRef(undefined); setHomeUnit("");
     setForm({ mode: "add" });
   };
   const openAssign = () => {
     setAssignUserId(""); setAssignUser(undefined); setRole(addRoleOptions[0] ?? "");
-    setSupervisorId(""); setSupervisorRef(undefined);
+    setSupervisorId(""); setSupervisorRef(undefined); setHomeUnit("");
     setForm({ mode: "assign" });
   };
-  // À la sélection de l'utilisateur, on préremplit son superviseur actuel.
+  // À la sélection de l'utilisateur, on préremplit son superviseur actuel et son assemblée
+  // personnelle : sans ce préremplissage, nommer quelqu'un responsable d'un nœud le déplacerait
+  // d'assemblée (ou échouerait), alors qu'on ne touche ici qu'à son poste de direction.
   const pickAssignUser = (id: string, picked?: AdminUserResponse) => {
     setAssignUserId(id);
     setAssignUser(picked);
     setSupervisorId(picked?.supervisorId ?? "");
     setSupervisorRef(picked ? supervisorRefOf(picked) : undefined);
+    setHomeUnit(picked?.goalUnitId ?? "");
   };
   const openEdit = (u: AdminUserResponse) => {
     if (!node) return;
@@ -139,6 +149,7 @@ export function ResponsablesDrawer({
     setRole((u.goalRole ?? u.donationRole ?? RESP_ROLES_BY_LEVEL[node.level][0] ?? "") as ModuleRole | "");
     setSupervisorId(u.supervisorId ?? "");
     setSupervisorRef(supervisorRefOf(u));
+    setHomeUnit(u.goalUnitId ?? "");
     setForm({ mode: "edit", user: u });
   };
 
@@ -159,7 +170,8 @@ export function ResponsablesDrawer({
         if (!node) return;
         return inviteUser({
           email: email.trim(), fullName: fullName.trim(), ministryId,
-          supervisorId: supervisorId || null, ...buildGoalAttachment(node.level, node.id, role),
+          supervisorId: supervisorId || null,
+          ...buildGoalAttachment(node.level, node.id, role, homeUnit || undefined),
         });
       }
       if (form.mode === "assign") {
@@ -182,6 +194,8 @@ export function ResponsablesDrawer({
           goalRole: role,
           entityId: node.level === "MINISTRY" ? null : entityIds[0],
           entityIds: node.level === "MINISTRY" ? undefined : entityIds,
+          // RG-BQ-03 — pour MEMBRE / DIRIGEANT_UNITE, c'est l'entité qui porte l'appartenance.
+          goalUnitId: needsHomeAssembly(role) ? (homeUnit || undefined) : undefined,
           supervisorId: supervisorId || null,
         });
       }
@@ -189,6 +203,7 @@ export function ResponsablesDrawer({
         goalRole: role,
         entityId: editLevel === "MINISTRY" ? null : ((editMulti ? editEntities[0] : editEntity) || null),
         entityIds: editMulti ? editEntities : undefined,
+        goalUnitId: needsHomeAssembly(role) ? (homeUnit || undefined) : undefined,
         supervisorId: supervisorId || null,
       });
     },
@@ -220,10 +235,25 @@ export function ResponsablesDrawer({
     onError: (e: unknown) => push({ kind: "error", title: t("common.failure"), msg: e instanceof Error ? e.message : t("common.error") }),
   });
 
+  /** Le champ « assemblée de rattachement » est-il affiché (et donc exigé) ? — RG-BQ-03. */
+  const homeRequired = !!role && needsHomeAssembly(role as ModuleRole);
+
   const valid =
-    form?.mode === "add" ? (!!role && fullName.trim() !== "" && /.+@.+\..+/.test(email))
+    (!homeRequired || homeUnit !== "")
+    && (form?.mode === "add" ? (!!role && fullName.trim() !== "" && /.+@.+\..+/.test(email))
     : form?.mode === "assign" ? (!!role && !!assignUserId)
-    : (!!role && (editLevel === "MINISTRY" || (editMulti ? editEntities.length > 0 : !!editEntity)));
+    : (!!role && (editLevel === "MINISTRY" || (editMulti ? editEntities.length > 0 : !!editEntity))));
+
+  // Un seul champ, partagé par les trois modes (inviter / affecter / réaffecter) : la contrainte
+  // RG-BQ-03 est la même partout, et trois copies divergeraient.
+  const homeAssemblyField = homeRequired ? (
+    <Field label={t("responsables.homeAssembly")} hint={t("responsables.homeAssemblyHint")}>
+      <Select value={homeUnit} onChange={(e) => setHomeUnit(e.target.value)}>
+        <option value="">{t("subscriptions.chooseOption")}</option>
+        {(org?.units ?? []).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+      </Select>
+    </Field>
+  ) : null;
 
   return (
     <>
@@ -318,6 +348,7 @@ export function ResponsablesDrawer({
                 {addRoleOptions.map((r) => <option key={r} value={r}>{t(`responsables.role.${r}`)}</option>)}
               </Select>
             </Field>
+            {homeAssemblyField}
             <RemoteSupervisorSelect ministryId={ministryId} value={supervisorId} selected={supervisorRef}
               onChange={(id, u) => { setSupervisorId(id); setSupervisorRef(u); }} t={t} />
           </div>
@@ -340,6 +371,7 @@ export function ResponsablesDrawer({
                 {addRoleOptions.map((r) => <option key={r} value={r}>{t(`responsables.role.${r}`)}</option>)}
               </Select>
             </Field>
+            {homeAssemblyField}
             <RemoteSupervisorSelect ministryId={ministryId} value={supervisorId} selected={supervisorRef}
               onChange={(id, u) => { setSupervisorId(id); setSupervisorRef(u); }} t={t}
               excludeId={assignUserId || undefined} />
@@ -372,6 +404,7 @@ export function ResponsablesDrawer({
                 {editRoleOptions.map((r) => <option key={r} value={r}>{t(`responsables.role.${r}`)}</option>)}
               </Select>
             </Field>
+            {homeAssemblyField}
             <RemoteSupervisorSelect ministryId={ministryId} value={supervisorId} selected={supervisorRef}
               onChange={(id, u) => { setSupervisorId(id); setSupervisorRef(u); }} t={t} excludeId={form.user.id} />
           </div>
