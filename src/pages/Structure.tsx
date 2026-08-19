@@ -8,6 +8,7 @@ import { buildTree, byNameFr, type NodeLevel, type TreeNode } from "@/lib/orgTre
 import { COUNTRIES_FR_SORTED } from "@/lib/countries";
 import { canHaveResponsables } from "@/lib/responsables";
 import { ResponsablesDrawer } from "@/components/ResponsablesDrawer";
+import { apiErrorCode } from "@/services/api";
 import { listMinistries, type MinistryResponse } from "@/services/ministryService";
 import { fetchResponsableCounts } from "@/services/userService";
 import {
@@ -54,6 +55,10 @@ export default function StructurePage() {
   const [editing, setEditing] = useState<Editing | null>(null);
   const [values, setValues] = useState<FormValues>(EMPTY_VALUES);
   const [deleting, setDeleting] = useState<TreeNode | null>(null);
+  // Suppression d'assemblée en deux temps : le backend refuse tant que des personnes y sont
+  // rattachées (UNIT_HAS_MEMBERS) et rend leur nombre dans le message. On l'affiche, puis le
+  // second clic renvoie `detachMembers` — le détachement est un choix, jamais un effet de bord.
+  const [detachWarning, setDetachWarning] = useState<string | null>(null);
   const [responsablesNode, setResponsablesNode] = useState<TreeNode | null>(null);
 
   const ministriesQ = useQuery({ queryKey: ["ministries"], queryFn: listMinistries });
@@ -179,17 +184,37 @@ export default function StructurePage() {
   });
 
   const deleteM = useMutation({
-    mutationFn: async (node: TreeNode) => {
+    mutationFn: async ({ node, detachMembers }: { node: TreeNode; detachMembers: boolean }) => {
       switch (node.level) {
         case "COUNTRY": return deleteCountry(node.id);
         case "ZONE": return deleteZone(node.id);
         case "LOCALITY": return deleteLocality(node.id);
-        case "UNIT": return deleteUnit(node.id);
+        case "UNIT": return deleteUnit(node.id, detachMembers);
       }
     },
-    onSuccess: () => { invalidate(); setDeleting(null); push({ kind: "ok", title: t("structure.deletedToast"), msg: "" }); },
-    onError: (e: unknown) => push({ kind: "error", title: t("structure.deleteFailToast"), msg: e instanceof Error ? e.message : t("common.error") }),
+    onSuccess: () => {
+      invalidate();
+      closeDelete();
+      // Les personnes détachées basculent dans « comptes sans assemblée » : leur ligne d'annuaire
+      // et les compteurs de responsables changent aussi.
+      qc.invalidateQueries({ queryKey: ["users-page"] });
+      qc.invalidateQueries({ queryKey: ["users-unattached"] });
+      push({ kind: "ok", title: t("structure.deletedToast"), msg: "" });
+    },
+    onError: (e: unknown) => {
+      const msg = e instanceof Error ? e.message : t("common.error");
+      // Refus « il reste du monde » : on ne le traite pas comme un échec sec, on propose la sortie.
+      if (apiErrorCode(e) === "UNIT_HAS_MEMBERS") {
+        setDetachWarning(msg);
+        return;
+      }
+      push({ kind: "error", title: t("structure.deleteFailToast"), msg });
+    },
   });
+
+  /** Rouvrir la modale repart du premier temps : l'avertissement porte sur UN nœud précis. */
+  const openDelete = (node: TreeNode) => { setDetachWarning(null); setDeleting(node); };
+  const closeDelete = () => { setDeleting(null); setDetachWarning(null); };
 
   // Validation des champs requis selon le niveau.
   const valid = (() => {
@@ -221,7 +246,7 @@ export default function StructurePage() {
             <div style={{ padding: 24, color: "var(--ink-500)" }}>{t("structure.loading")}</div>
           ) : tree ? (
             <div style={{ padding: "8px 4px" }}>
-              <StructureRow node={tree} depth={0} counts={respCounts} onAdd={openAdd} onEdit={openEdit} onDelete={setDeleting} onResponsables={setResponsablesNode} t={t} />
+              <StructureRow node={tree} depth={0} counts={respCounts} onAdd={openAdd} onEdit={openEdit} onDelete={openDelete} onResponsables={setResponsablesNode} t={t} />
             </div>
           ) : null}
         </div>
@@ -315,19 +340,32 @@ export default function StructurePage() {
       {/* Confirmation suppression */}
       <Modal
         open={!!deleting}
-        onClose={() => setDeleting(null)}
+        onClose={closeDelete}
         title={t("structure.deleteTitle")}
         sub={deleting ? `${t(`subscriptions.level.${deleting.level}`)} · ${deleting.name}` : undefined}
         footer={
           <>
-            <Button variant="ghost" onClick={() => setDeleting(null)}>{t("common.cancel")}</Button>
-            <Button variant="danger" disabled={deleteM.isPending} onClick={() => deleting && deleteM.mutate(deleting)}>
-              {deleteM.isPending ? t("common.loading") : t("structure.confirmDelete")}
+            <Button variant="ghost" onClick={closeDelete}>{t("common.cancel")}</Button>
+            <Button
+              variant="danger"
+              disabled={deleteM.isPending}
+              onClick={() => deleting && deleteM.mutate({ node: deleting, detachMembers: !!detachWarning })}
+            >
+              {deleteM.isPending ? t("common.loading")
+                : detachWarning ? t("structure.confirmDetachAndDelete")
+                : t("structure.confirmDelete")}
             </Button>
           </>
         }
       >
-        <p style={{ margin: 0, color: "var(--ink-600)" }}>{t("structure.deleteWarning")}</p>
+        {detachWarning ? (
+          <>
+            <p style={{ margin: "0 0 10px", color: "var(--ink-700)" }}>{detachWarning}</p>
+            <p style={{ margin: 0, color: "var(--ink-600)" }}>{t("structure.detachWarning")}</p>
+          </>
+        ) : (
+          <p style={{ margin: 0, color: "var(--ink-600)" }}>{t("structure.deleteWarning")}</p>
+        )}
       </Modal>
     </>
   );

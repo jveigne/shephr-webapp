@@ -392,6 +392,8 @@
     "delete": "Supprimer",
     "deleteTitle": "Supprimer cet élément ?",
     "deleteWarning": "Cette suppression est définitive et n'est possible que si l'élément n'a pas de sous-éléments.",
+    "detachWarning": "Ces personnes seront détachées de leur assemblée et retomberont dans l'onglet « comptes sans assemblée » d'Utilisateurs, où vous pourrez les réaffecter ou les supprimer. Leurs engagements les suivent.",
+    "confirmDetachAndDelete": "Détacher et supprimer",
     "confirmDelete": "Supprimer",
     "savedToast": "Enregistré",
     "deletedToast": "Élément supprimé",

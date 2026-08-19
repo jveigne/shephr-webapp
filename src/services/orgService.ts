@@ -139,8 +139,14 @@ export function deleteZone(id: string): Promise<void> {
 export function deleteLocality(id: string): Promise<void> {
   return apiFetch<void>(`/api/org/admin/localities/${id}`, { method: "DELETE" });
 }
-export function deleteUnit(id: string): Promise<void> {
-  return apiFetch<void>(`/api/org/admin/units/${id}`, { method: "DELETE" });
+/**
+ * Supprime une assemblée. Refusée (`UNIT_HAS_MEMBERS`) tant que des personnes y sont rattachées ;
+ * `detachMembers` les détache à la place — elles retombent dans l'onglet « comptes sans assemblée »
+ * d'Utilisateurs. À n'envoyer que sur confirmation explicite de l'administrateur.
+ */
+export function deleteUnit(id: string, detachMembers = false): Promise<void> {
+  const qs = detachMembers ? "?detachMembers=true" : "";
+  return apiFetch<void>(`/api/org/admin/units/${id}${qs}`, { method: "DELETE" });
 }
 
 // ---- Arbre générique (Chantier B) : libellé Région/État porté par le nœud NATION ----

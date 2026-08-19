@@ -392,6 +392,8 @@
     "delete": "Delete",
     "deleteTitle": "Delete this item?",
     "deleteWarning": "This deletion is permanent and only possible if the item has no sub-items.",
+    "detachWarning": "These people will be detached from their assembly and will appear in the “accounts without an assembly” tab of Users, where you can reassign or delete them. Their pledges follow them.",
+    "confirmDetachAndDelete": "Detach and delete",
     "confirmDelete": "Delete",
     "savedToast": "Saved",
     "deletedToast": "Item deleted",
