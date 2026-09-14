@@ -26,7 +26,8 @@
     "saving": "Enregistrement…",
     "unexpectedError": "Une erreur inattendue est survenue",
     "unexpectedErrorHint": "Cette page n'a pas pu s'afficher. Réessayez ou revenez à l'écran précédent.",
-    "retry": "Réessayer"
+    "retry": "Réessayer",
+    "edit": "Modifier"
   },
   "nav": {
     "clients": "Clients",
@@ -365,7 +366,19 @@
     "contactWhatsappInvalid": "Numéro invalide : uniquement des chiffres, sans « + » ni espace.",
     "contactSaved": "Coordonnées mises à jour",
     "contactSaveFailed": "Enregistrement impossible",
-    "contactLoadFailed": "Chargement des coordonnées impossible"
+    "contactLoadFailed": "Chargement des coordonnées impossible",
+    "ministryLabel": "Ministère",
+    "pickMinistry": "Choisir un ministère…",
+    "pickMinistryHint": "Choisissez un ministère pour voir sa liste de rubriques.",
+    "noCategories": "Aucune rubrique pour ce ministère.",
+    "categorySaved": "Rubrique enregistrée",
+    "categoryDeleted": "Rubrique supprimée",
+    "categoryInUseTitle": "Rubrique utilisée",
+    "categoryInUseMsg": "Des dons ont déjà été déclarés sur cette rubrique : désactivez-la plutôt que de la supprimer, l'historique reste intact.",
+    "categoryInUseBadge": "Utilisée",
+    "categoryNameFrPlaceholder": "Libellé français",
+    "categoryNameEnPlaceholder": "Libellé anglais (facultatif)",
+    "categoryCodeHint": "Le code technique est dérivé du libellé français à la création et n'est plus modifiable : c'est lui qui rattache les dons déjà déclarés."
   },
   "placeholder": {
     "comingSoon": "Écran back-office à venir",
@@ -565,6 +578,26 @@
     "correctNeedsAssembly": "Ce compte n'a aucune assemblée de rattachement : rattachez-le d'abord (onglet « Sans assemblée » ou action Rôle), la correction sera alors possible.",
     "correctYearClosed": "L'année {{year}} n'est pas ouverte à la déclaration : personne ne peut y écrire, secrétariat compris. Rouvrez l'année d'abord.",
     "correctedToast": "Engagement corrigé",
+    "treasurerAction": "Trésorier",
+    "treasurerTitle": "Nommer trésorier",
+    "treasurerHint": "Le trésorier est une affectation à un nœud, pas un rang : nommer quelqu'un ici ne change aucun rôle, et un rôle ne rend personne trésorier. Le trésorier voit les dons de toute la sous-branche du nœud — placé plus haut, il voit plus large, et une assemblée créée plus tard y entre d'elle-même. Il lit : il ne modifie jamais la déclaration d'un autre.",
+    "treasurerCurrent": "Affectations en cours",
+    "treasurerNone": "Cette personne n'est trésorière d'aucun nœud.",
+    "treasurerAppointedBy": "Nommé par {{name}}",
+    "treasurerRemove": "Retirer",
+    "treasurerRevokeHint": "Le retrait prend effet immédiatement, sans nouvelle connexion de la personne. L'affectation est désactivée, pas supprimée : la trace de qui a eu accès aux finances est conservée.",
+    "treasurerPick": "Choisir un ou plusieurs nœuds",
+    "treasurerPickHint": "Nation, région, ville ou assemblée. Le ministère n'est pas un nœud : on ne peut pas y nommer de trésorier.",
+    "treasurerAlready": "Déjà trésorier ici",
+    "treasurerSelected": "Sélection : {{n}}",
+    "treasurerConfirm": "Nommer trésorier",
+    "treasurerAssignedToast": "Trésorier nommé",
+    "treasurerAssignedToastMsg": "La personne voit désormais les dons de la sous-branche — dès son prochain écran, sans nouvelle connexion.",
+    "treasurerRevokedToast": "Affectation retirée",
+    "treasurerRevokedToastMsg": "L'accès aux dons de cette sous-branche est coupé immédiatement.",
+    "treasurerMismatch": "Cette personne n'appartient pas au ministère de ce nœud : on ne nomme pas un trésorier hors de son ministère.",
+    "treasurerNeedsMinistry": "Ce compte n'est rattaché à aucun ministère : choisissez d'abord un ministère dans le bandeau, l'arbre s'affichera.",
+    "treasurerNoOrg": "Aucune structure dans ce ministère : créez la nation, la région, la ville et l'assemblée d'abord.",
     "correctedToastMsg": "La valeur a été enregistrée pour la personne."
   }
 }

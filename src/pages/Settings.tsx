@@ -1,11 +1,21 @@
 import { useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Trans, useTranslation } from "react-i18next";
 import { Icons } from "@/components/icons";
 import { Badge, Button, Field, Input, Select, Toggle, TopBar } from "@/components/primitives";
 import { useToasts } from "@/context/ToastContext";
 import { setLanguage, type AppLang } from "@/i18n";
-import { ADMIN, CATEGORIES } from "@/data/mock";
+import { ADMIN } from "@/data/mock";
 import { fetchContactSettings, updateContactSettings } from "@/services/platformService";
+import { listMinistries, type MinistryResponse } from "@/services/ministryService";
+import {
+  createDonationCategory,
+  deleteDonationCategory,
+  listDonationCategories,
+  updateDonationCategory,
+  type DonationCategoryResponse,
+} from "@/services/donationCategoryService";
+import { apiErrorCode } from "@/services/api";
 
 function ProfilTab() {
   const { push } = useToasts();
@@ -280,61 +290,245 @@ function ContactSettingsCard() {
   );
 }
 
+/**
+ * Lot T5 (JP 14/09) — RUBRIQUES DE DON, branchées sur l'API.
+ *
+ * Cet écran tournait sur un MOCK : `useState(CATEGORIES.map(...))` depuis `@/data/mock`,
+ * identifiants `c-${Date.now()}` fabriqués localement, aucun appel réseau — rien n'était persisté,
+ * et les libellés affichés (« Offrande générale », « Reconnaissance ») ne correspondaient à aucune
+ * des 6 clés réellement en service dans l'app mobile. **Le serveur fait foi.**
+ *
+ * Décision D0-5 : **une liste par ministère**, valable dans toutes ses assemblées. Le back-office
+ * étant cross-tenant, il faut donc choisir le ministère avant de voir ou de toucher sa liste —
+ * même geste que l'écran Abonnements.
+ *
+ * Deux règles de gouvernance se lisent directement dans l'UI :
+ *  - le **code** est immuable (il rattache l'historique des dons) : il s'affiche, il ne se saisit
+ *    pas ; le serveur le dérive du libellé français à la création ;
+ *  - une rubrique **utilisée** ne se supprime pas, elle se **désactive** — le bouton de suppression
+ *    est retiré et la bascule reste, pour ne pas trouer l'historique des dons déjà déclarés.
+ */
+function DonationCategoriesCard({ ministryId }: { ministryId: string }) {
+  const { push } = useToasts();
+  const { t, i18n } = useTranslation();
+  const qc = useQueryClient();
+  const isEn = (i18n.resolvedLanguage || i18n.language) === "en";
+
+  const [newName, setNewName] = useState("");
+  const [newNameEn, setNewNameEn] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editNameEn, setEditNameEn] = useState("");
+
+  const catsQ = useQuery({
+    queryKey: ["donation-categories", ministryId],
+    queryFn: () => listDonationCategories(ministryId, true),
+    enabled: !!ministryId,
+  });
+
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["donation-categories", ministryId] });
+  const fail = (e: unknown) =>
+    push({ kind: "error", title: t("common.error"), msg: e instanceof Error ? e.message : String(e) });
+
+  const addM = useMutation({
+    mutationFn: () =>
+      createDonationCategory(ministryId, {
+        name: newName.trim(),
+        nameEn: newNameEn.trim() || undefined,
+      }),
+    onSuccess: (created) => {
+      setNewName("");
+      setNewNameEn("");
+      invalidate();
+      push({ kind: "ok", title: t("settings.categoryAdded"), msg: created.name });
+    },
+    onError: fail,
+  });
+
+  const patchM = useMutation({
+    mutationFn: (v: { id: string; name?: string; nameEn?: string; active?: boolean }) =>
+      updateDonationCategory(v.id, { name: v.name, nameEn: v.nameEn, active: v.active }),
+    onSuccess: () => {
+      setEditingId(null);
+      invalidate();
+      push({ kind: "ok", title: t("settings.categorySaved") });
+    },
+    onError: fail,
+  });
+
+  const removeM = useMutation({
+    mutationFn: (id: string) => deleteDonationCategory(id),
+    onSuccess: () => {
+      invalidate();
+      push({ kind: "ok", title: t("settings.categoryDeleted") });
+    },
+    onError: (e: unknown) => {
+      // 422 CATEGORY_IN_USE : la rubrique porte déjà des dons. On le dit en clair et on renvoie
+      // vers le bon geste — désactiver — au lieu d'un message d'erreur technique.
+      if (apiErrorCode(e) === "CATEGORY_IN_USE") {
+        push({ kind: "error", title: t("settings.categoryInUseTitle"), msg: t("settings.categoryInUseMsg") });
+        invalidate();
+        return;
+      }
+      fail(e);
+    },
+  });
+
+  const startEdit = (c: DonationCategoryResponse) => {
+    setEditingId(c.id);
+    setEditName(c.name);
+    setEditNameEn(c.nameEn ?? "");
+  };
+
+  const categories = catsQ.data ?? [];
+  const busy = addM.isPending || patchM.isPending || removeM.isPending;
+
+  return (
+    <div className="card card-pad">
+      <h3 style={{ fontFamily: "var(--font-serif)", fontWeight: 500, fontSize: 17, color: "var(--green-800)", margin: "0 0 6px" }}>
+        {t("settings.donationCategoriesTitle")}
+      </h3>
+      <div style={{ color: "var(--ink-500)", fontSize: 13, marginBottom: 14 }}>
+        {t("settings.donationCategoriesDesc")}
+      </div>
+
+      {!ministryId ? (
+        <div style={{ color: "var(--ink-500)", fontSize: 13, padding: "12px 0" }}>
+          {t("settings.pickMinistryHint")}
+        </div>
+      ) : catsQ.isLoading ? (
+        <div style={{ color: "var(--ink-500)", fontSize: 13, padding: "12px 0" }}>{t("common.loading")}</div>
+      ) : catsQ.isError ? (
+        <div style={{ color: "var(--err)", fontSize: 13, padding: "12px 0" }}>
+          {catsQ.error instanceof Error ? catsQ.error.message : t("common.error")}
+        </div>
+      ) : (
+        <>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 14 }}>
+            {categories.length === 0 && (
+              <div style={{ color: "var(--ink-500)", fontSize: 13 }}>{t("settings.noCategories")}</div>
+            )}
+            {categories.map((c) => (
+              <div key={c.id} style={{
+                display: "flex", alignItems: "center", gap: 10,
+                padding: "10px 12px",
+                background: "var(--ivory-raised)",
+                border: "1px solid var(--line-soft)",
+                borderRadius: 8,
+              }}>
+                <Icons.Tag size={14} style={{ color: "var(--earth-600)" }} />
+                {editingId === c.id ? (
+                  <>
+                    <Input
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      placeholder={t("settings.categoryNameFrPlaceholder")}
+                    />
+                    <Input
+                      value={editNameEn}
+                      onChange={(e) => setEditNameEn(e.target.value)}
+                      placeholder={t("settings.categoryNameEnPlaceholder")}
+                    />
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      disabled={busy || !editName.trim()}
+                      onClick={() => patchM.mutate({ id: c.id, name: editName.trim(), nameEn: editNameEn.trim() })}
+                    >
+                      {t("common.save")}
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => setEditingId(null)}>
+                      {t("common.cancel")}
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ fontSize: 13.5, color: c.active ? "var(--ink-900)" : "var(--ink-400)" }}>
+                        {isEn ? c.nameEn || c.name : c.name}
+                      </span>
+                      {/* Le code est la clé de rattachement de l'historique : visible, jamais éditable. */}
+                      <span style={{ fontSize: 11.5, color: "var(--ink-400)", marginLeft: 8, fontFamily: "var(--font-mono)" }}>
+                        {c.code}
+                      </span>
+                    </div>
+                    <button className="icon-btn" title={t("common.edit")} onClick={() => startEdit(c)}>
+                      <Icons.Edit size={14} />
+                    </button>
+                    <Toggle checked={c.active} onChange={(v) => patchM.mutate({ id: c.id, active: v })} />
+                    {c.inUse ? (
+                      // §5.7 — utilisée : la suppression n'a même pas à être proposée.
+                      <span style={{ fontSize: 11.5, color: "var(--ink-400)" }} title={t("settings.categoryInUseMsg")}>
+                        {t("settings.categoryInUseBadge")}
+                      </span>
+                    ) : (
+                      <button className="icon-btn danger" disabled={busy} onClick={() => removeM.mutate(c.id)}>
+                        <Icons.Trash size={14} />
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <Input
+              placeholder={t("settings.newCategoryPlaceholder")}
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && newName.trim() && addM.mutate()}
+              icon={<Icons.Plus size={14} />}
+            />
+            <Input
+              placeholder={t("settings.categoryNameEnPlaceholder")}
+              value={newNameEn}
+              onChange={(e) => setNewNameEn(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && newName.trim() && addM.mutate()}
+            />
+            <Button variant="secondary" disabled={busy || !newName.trim()} onClick={() => addM.mutate()}>
+              {t("common.add")}
+            </Button>
+          </div>
+          <div style={{ color: "var(--ink-400)", fontSize: 12, marginTop: 8 }}>
+            {t("settings.categoryCodeHint")}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function ConfigTab() {
   const { push } = useToasts();
   const { t } = useTranslation();
-  const [categories, setCategories] = useState(CATEGORIES.map((c, i) => ({ id: `c-${i}`, name: c, active: true })));
-  const [newCat, setNewCat] = useState("");
+  const [ministryId, setMinistryId] = useState("");
   const [supported, setSupported] = useState<Record<string, boolean>>({ GBP: true, EUR: true, USD: false, CHF: false, CAD: false });
   const [defaultCur, setDefaultCur] = useState("GBP");
 
-  const addCat = () => {
-    if (!newCat.trim()) return;
-    setCategories([...categories, { id: `c-${Date.now()}`, name: newCat.trim(), active: true }]);
-    setNewCat("");
-    push({ kind: "ok", title: t("settings.categoryAdded"), msg: newCat });
-  };
+  const ministriesQ = useQuery({ queryKey: ["ministries"], queryFn: listMinistries });
+
+  // Un seul ministère : inutile de faire choisir, on le sélectionne.
+  useEffect(() => {
+    const list = ministriesQ.data ?? [];
+    if (!ministryId && list.length === 1) setMinistryId(list[0].id);
+  }, [ministriesQ.data, ministryId]);
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
       <ContactSettingsCard />
 
-      <div className="card card-pad">
-        <h3 style={{ fontFamily: "var(--font-serif)", fontWeight: 500, fontSize: 17, color: "var(--green-800)", margin: "0 0 6px" }}>
-          {t("settings.donationCategoriesTitle")}
-        </h3>
-        <div style={{ color: "var(--ink-500)", fontSize: 13, marginBottom: 14 }}>
-          {t("settings.donationCategoriesDesc")}
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 14 }}>
-          {categories.map((c) => (
-            <div key={c.id} style={{
-              display: "flex", alignItems: "center", gap: 10,
-              padding: "10px 12px",
-              background: "var(--ivory-raised)",
-              border: "1px solid var(--line-soft)",
-              borderRadius: 8,
-            }}>
-              <Icons.Tag size={14} style={{ color: "var(--earth-600)" }} />
-              <span style={{ flex: 1, fontSize: 13.5, color: c.active ? "var(--ink-900)" : "var(--ink-400)" }}>{c.name}</span>
-              <Toggle checked={c.active} onChange={(v) => setCategories(categories.map((x) => (x.id === c.id ? { ...x, active: v } : x)))} />
-              <button className="icon-btn danger" onClick={() => setCategories(categories.filter((x) => x.id !== c.id))}>
-                <Icons.Trash size={14} />
-              </button>
-            </div>
+      <div className="card card-pad" style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <span style={{ fontWeight: 600, fontSize: 13.5 }}>{t("settings.ministryLabel")}</span>
+        <Select value={ministryId} onChange={(e) => setMinistryId(e.target.value)}>
+          <option value="">{t("settings.pickMinistry")}</option>
+          {(ministriesQ.data ?? []).map((m: MinistryResponse) => (
+            <option key={m.id} value={m.id}>{m.name}</option>
           ))}
-        </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <Input
-            placeholder={t("settings.newCategoryPlaceholder")}
-            value={newCat}
-            onChange={(e) => setNewCat(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && addCat()}
-            icon={<Icons.Plus size={14} />}
-          />
-          <Button variant="secondary" onClick={addCat}>{t("common.add")}</Button>
-        </div>
+        </Select>
       </div>
+
+      <DonationCategoriesCard ministryId={ministryId} />
 
       <div className="card card-pad">
         <h3 style={{ fontFamily: "var(--font-serif)", fontWeight: 500, fontSize: 17, color: "var(--green-800)", margin: "0 0 6px" }}>

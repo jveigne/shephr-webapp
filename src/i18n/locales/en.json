@@ -26,7 +26,8 @@
     "saving": "Saving…",
     "unexpectedError": "Something went wrong",
     "unexpectedErrorHint": "This page could not be displayed. Try again or go back to the previous screen.",
-    "retry": "Try again"
+    "retry": "Try again",
+    "edit": "Edit"
   },
   "nav": {
     "clients": "Clients",
@@ -365,7 +366,19 @@
     "contactWhatsappInvalid": "Invalid number: digits only, no “+” and no spaces.",
     "contactSaved": "Contact details updated",
     "contactSaveFailed": "Could not save",
-    "contactLoadFailed": "Could not load contact details"
+    "contactLoadFailed": "Could not load contact details",
+    "ministryLabel": "Ministry",
+    "pickMinistry": "Select a ministry…",
+    "pickMinistryHint": "Select a ministry to see its list of categories.",
+    "noCategories": "No category for this ministry.",
+    "categorySaved": "Category saved",
+    "categoryDeleted": "Category deleted",
+    "categoryInUseTitle": "Category in use",
+    "categoryInUseMsg": "Donations have already been declared under this category: deactivate it instead of deleting it, so the history stays intact.",
+    "categoryInUseBadge": "In use",
+    "categoryNameFrPlaceholder": "French label",
+    "categoryNameEnPlaceholder": "English label (optional)",
+    "categoryCodeHint": "The technical code is derived from the French label on creation and cannot be changed afterwards: it is what links the donations already declared."
   },
   "placeholder": {
     "comingSoon": "Back-office screen coming soon",
@@ -565,6 +578,26 @@
     "correctNeedsAssembly": "This account has no home assembly: attach it first (“Without assembly” tab or the Role action), then the correction becomes possible.",
     "correctYearClosed": "Year {{year}} is not open for declarations: nobody can write into it, secretariat included. Reopen the year first.",
     "correctedToast": "Objective corrected",
+    "treasurerAction": "Treasurer",
+    "treasurerTitle": "Appoint treasurer",
+    "treasurerHint": "A treasurer is an assignment to a node, not a rank: appointing someone here changes no role, and no role makes anyone a treasurer. The treasurer sees the donations of the node's whole sub-branch — placed higher, they see wider, and an assembly created later joins it on its own. They read: they never edit someone else's declaration.",
+    "treasurerCurrent": "Current assignments",
+    "treasurerNone": "This person is treasurer of no node.",
+    "treasurerAppointedBy": "Appointed by {{name}}",
+    "treasurerRemove": "Remove",
+    "treasurerRevokeHint": "Removal takes effect immediately, without the person signing in again. The assignment is deactivated, not deleted: the record of who had access to the finances is kept.",
+    "treasurerPick": "Pick one or more nodes",
+    "treasurerPickHint": "Nation, region, city or assembly. The ministry is not a node: no treasurer can be appointed there.",
+    "treasurerAlready": "Already treasurer here",
+    "treasurerSelected": "Selected: {{n}}",
+    "treasurerConfirm": "Appoint treasurer",
+    "treasurerAssignedToast": "Treasurer appointed",
+    "treasurerAssignedToastMsg": "The person now sees the sub-branch donations — from their next screen, without signing in again.",
+    "treasurerRevokedToast": "Assignment removed",
+    "treasurerRevokedToastMsg": "Access to that sub-branch's donations is cut immediately.",
+    "treasurerMismatch": "This person does not belong to the ministry of that node: a treasurer is never appointed outside their own ministry.",
+    "treasurerNeedsMinistry": "This account belongs to no ministry: pick a ministry in the header first and the tree will appear.",
+    "treasurerNoOrg": "No structure in this ministry: create the nation, region, city and assembly first.",
     "correctedToastMsg": "The value has been saved for that person."
   }
 }
