@@ -261,7 +261,7 @@ export function Pagination({
   const to = Math.min(page * perPage, total);
   const windowSize = 5;
   let start = Math.max(1, page - 2);
-  let end = Math.min(pageCount, start + windowSize - 1);
+  const end = Math.min(pageCount, start + windowSize - 1);
   start = Math.max(1, end - windowSize + 1);
   const pages: number[] = [];
   for (let i = start; i <= end; i++) pages.push(i);

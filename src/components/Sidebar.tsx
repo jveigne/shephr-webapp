@@ -19,7 +19,11 @@ const NAV: NavSection[] = [
   },
   {
     sectionKey: "nav.billing",
-    items: [{ id: "abonnements", labelKey: "nav.subscriptions", icon: "Currency", path: "/abonnements" }],
+    items: [
+      { id: "abonnements", labelKey: "nav.subscriptions", icon: "Currency", path: "/abonnements" },
+      // D-ASM-10 (JP 23/09) — référentiel des modules d'enseignement, à côté des Abonnements (§6.1).
+      { id: "modules-enseignement", labelKey: "nav.teachingModules", icon: "Folder", path: "/modules-enseignement" },
+    ],
   },
   {
     sectionKey: "nav.governance",
