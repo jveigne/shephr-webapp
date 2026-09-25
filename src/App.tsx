@@ -14,6 +14,7 @@ import StructurePage from "@/pages/Structure";
 import DemandesPage from "@/pages/Demandes";
 import UtilisateursPage from "@/pages/Utilisateurs";
 import AbonnementsPage from "@/pages/Abonnements";
+import ModulesEnseignementPage from "@/pages/ModulesEnseignement";
 import AuditPage from "@/pages/Audit";
 import SettingsPage from "@/pages/Settings";
 
@@ -59,6 +60,8 @@ export default function App() {
               <Route path="/demandes" element={<Shielded><DemandesPage /></Shielded>} />
               <Route path="/utilisateurs" element={<Shielded><UtilisateursPage /></Shielded>} />
               <Route path="/abonnements" element={<Shielded><AbonnementsPage /></Shielded>} />
+              {/* D-ASM-10 (JP 23/09) — modules d'enseignement par ministère */}
+              <Route path="/modules-enseignement" element={<Shielded><ModulesEnseignementPage /></Shielded>} />
               <Route
                 path="/goals"
                 element={
