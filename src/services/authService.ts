@@ -21,6 +21,15 @@ export type ChurchUser = {
   ministryId?: string | null;
   donationUnitId?: string | null;
   donationZoneId?: string | null;
+  /**
+   * Lot T2 (décision J-1, 14/09) — fonction de TRÉSORIER : au moins une affectation active à un
+   * nœud, ou `superAdmin`. Lue en base à chaque `/me`, jamais dans le JWT : une nomination ou un
+   * retrait vaut immédiatement. Le rang pastoral (`donationRole`) ne confère plus rien côté Dons.
+   */
+  treasurer?: boolean;
+  /** Nœuds sur lesquels la personne est trésorière ; vide sinon. Le périmètre effectif en
+   *  assemblées n'est pas exposé — il est dérivé du sous-arbre côté serveur. */
+  treasurerNodeIds?: string[];
   active: boolean;
 };
 

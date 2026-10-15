@@ -1,14 +1,22 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Badge, Button, Field, Input, Modal, Select, Table, Toggle, TopBar } from "@/components/primitives";
+import { Badge, Button, Checkbox, Field, Input, Modal, Select, Table, Toggle, TopBar } from "@/components/primitives";
+import { Icons } from "@/components/icons";
 import { RemoteSupervisorSelect, type UserRef } from "@/components/UserCombobox";
 import { EntityMultiPicker } from "@/components/EntityMultiPicker";
 import { isMultiAttachmentRole, needsHomeAssembly } from "@/lib/responsables";
+import { buildTree, type NodeLevel, type TreeNode } from "@/lib/orgTree";
+import { useAuth } from "@/context/AuthContext";
 import { useToasts } from "@/context/ToastContext";
 import { useDebounced } from "@/hooks/useDebounced";
+import { apiErrorCode } from "@/services/api";
 import { listMinistries, type MinistryResponse } from "@/services/ministryService";
 import { fetchMinistryStructure } from "@/services/orgService";
+import {
+  assignTreasurer, listTreasurerAssignments, revokeTreasurer,
+  type TreasurerNodeType,
+} from "@/services/treasurerService";
 import {
   createMemberPledge, getActiveGoal, getMemberGoals, unlockMember,
   type GoalCategoryResponse,
@@ -43,10 +51,34 @@ const ENTITY_REQUIRED_ROLES: ModuleRole[] = ["MEMBRE", "DIRIGEANT_UNITE", "DIRIG
  */
 type UsersView = "all" | "unattached";
 
+/**
+ * Lot T3 (décision J-1, 14/09) — l'arbre des trésoriers parle le vocabulaire de `org_node`
+ * (NATION / REGION / CITY / ASSEMBLY), l'arbre du back-office celui des scopes legacy
+ * (COUNTRY / ZONE / LOCALITY / UNIT). Les IDS sont identiques (migration Chantier B : node.id =
+ * id legacy), seuls les LIBELLÉS diffèrent — cette table les réconcilie pour réutiliser les clés
+ * i18n `subscriptions.level.*` déjà en place, sans créer un second vocabulaire à l'écran.
+ */
+const NODE_TYPE_TO_LEVEL: Record<TreasurerNodeType, NodeLevel> = {
+  NATION: "COUNTRY",
+  REGION: "ZONE",
+  CITY: "LOCALITY",
+  ASSEMBLY: "UNIT",
+};
+
 export default function UtilisateursPage() {
   const { t } = useTranslation();
   const { push } = useToasts();
   const qc = useQueryClient();
+  const { user: me } = useAuth();
+
+  /**
+   * Lot T3 — nommer un trésorier est réservé SECRETARIAT / SUPER_ADMIN, exactement comme la garde
+   * applicative `AdminTreasurerServiceImpl.requireSuperAdminOrSecretariat`. On MASQUE l'action
+   * plutôt que de l'offrir pour la voir finir en 403 ; le gating front ne remplace pas la garde
+   * serveur, il évite d'afficher un bouton inutile.
+   */
+  const canManageTreasurers = !!me
+    && (me.superAdmin || me.goalRole === "SECRETARIAT" || me.donationRole === "SECRETARIAT");
 
   const [view, setView] = useState<UsersView>("all");
   const [ministryId, setMinistryId] = useState("");
@@ -102,6 +134,9 @@ export default function UtilisateursPage() {
   const [corrOpen, setCorrOpen] = useState(false);
   const [corrCategoryId, setCorrCategoryId] = useState("");
   const [corrValue, setCorrValue] = useState("");
+  // Nomination des trésoriers (lot T3) : la personne visée, et les nœuds cochés dans son arbre.
+  const [treasurerUser, setTreasurerUser] = useState<AdminUserResponse | null>(null);
+  const [treasurerPicked, setTreasurerPicked] = useState<string[]>([]);
 
   const ministriesQ = useQuery({ queryKey: ["ministries"], queryFn: listMinistries });
 
@@ -453,6 +488,92 @@ export default function UtilisateursPage() {
     setCorrOpen(true);
   };
 
+  // ---- Trésoriers (lot T3, décision J-1 du 14/09) ----
+  // « Trésorier = affectation à un nœud, pas un rang » : cette modale n'écrit JAMAIS `goalRole`
+  // ni `donationRole`. Elle pose / retire des lignes de `don_treasurer_assignment`, et c'est tout.
+  const openTreasurer = (u: AdminUserResponse) => {
+    setTreasurerPicked([]);
+    setTreasurerUser(u);
+  };
+
+  // Arbre montré : celui du ministère de LA PERSONNE — une nomination croisée est refusée par le
+  // backend (422 TREASURER_MINISTRY_MISMATCH). Repli sur le ministère filtré à l'écran pour les
+  // comptes sans ministère (administrateur plateforme).
+  const treasurerMinistryId = treasurerUser?.ministryId || ministryId || "";
+
+  const treasurerOrgQ = useQuery({
+    queryKey: ["ministry-structure", treasurerMinistryId],
+    queryFn: () => fetchMinistryStructure(treasurerMinistryId),
+    enabled: !!treasurerUser && !!treasurerMinistryId,
+  });
+
+  const treasurerAssignmentsQ = useQuery({
+    queryKey: ["treasurer-assignments", treasurerUser?.id ?? ""],
+    queryFn: () => listTreasurerAssignments({ userId: treasurerUser!.id }),
+    enabled: !!treasurerUser,
+  });
+
+  const treasurerAssignments = treasurerAssignmentsQ.data ?? [];
+  // Nœuds DÉJÀ couverts : on les affiche cochés-verrouillés plutôt que re-nommables. L'appel serait
+  // pourtant sans danger (idempotent côté serveur), mais un bouton qui ne change rien trompe.
+  const treasurerNodeIds = useMemo(
+    () => new Set((treasurerAssignmentsQ.data ?? []).map((a) => a.nodeId)),
+    [treasurerAssignmentsQ.data],
+  );
+
+  const treasurerMinistryName = useMemo(() => {
+    const m = (ministriesQ.data ?? []).find((x) => x.id === treasurerMinistryId);
+    return m?.name ?? "—";
+  }, [ministriesQ.data, treasurerMinistryId]);
+
+  // Même arbre à 4 niveaux que la page Abonnements (`buildTree`), sans la logique de couverture :
+  // ici on ne montre pas ce qui est abonné, on choisit où quelqu'un tient la caisse.
+  const treasurerTree = useMemo(() => {
+    if (!treasurerOrgQ.data || !treasurerMinistryId) return null;
+    return buildTree(treasurerOrgQ.data, treasurerMinistryId, treasurerMinistryName);
+  }, [treasurerOrgQ.data, treasurerMinistryId, treasurerMinistryName]);
+
+  const invalidateTreasurers = () => {
+    qc.invalidateQueries({ queryKey: ["treasurer-assignments"] });
+  };
+
+  const assignTreasurerM = useMutation({
+    // Une requête par nœud : le contrat backend nomme UN nœud à la fois. Séquentiel et non
+    // parallèle pour que l'erreur remontée désigne le nœud fautif, et que les nominations déjà
+    // passées restent acquises (l'opération est idempotente, un nouvel essai ne duplique rien).
+    mutationFn: async () => {
+      for (const nodeId of treasurerPicked) {
+        await assignTreasurer({ userId: treasurerUser!.id, nodeId });
+      }
+    },
+    onSuccess: () => {
+      invalidateTreasurers();
+      setTreasurerPicked([]);
+      push({ kind: "ok", title: t("users.treasurerAssignedToast"), msg: t("users.treasurerAssignedToastMsg") });
+    },
+    onError: (e: unknown) => push({
+      kind: "error",
+      title: t("common.failure"),
+      // 422 métier explicite (§T2) : le dire en clair, le message serveur est en français seul.
+      msg: apiErrorCode(e) === "TREASURER_MINISTRY_MISMATCH"
+        ? t("users.treasurerMismatch")
+        : e instanceof Error ? e.message : t("common.error"),
+    }),
+  });
+
+  const revokeTreasurerM = useMutation({
+    mutationFn: (id: string) => revokeTreasurer(id),
+    onSuccess: () => {
+      invalidateTreasurers();
+      push({ kind: "ok", title: t("users.treasurerRevokedToast"), msg: t("users.treasurerRevokedToastMsg") });
+    },
+    onError: (e: unknown) => push({ kind: "error", title: t("common.failure"), msg: e instanceof Error ? e.message : t("common.error") }),
+  });
+
+  const toggleTreasurerNode = (nodeId: string) => {
+    setTreasurerPicked((prev) => prev.includes(nodeId) ? prev.filter((id) => id !== nodeId) : [...prev, nodeId]);
+  };
+
   const cols = [
     { label: t("users.colName"), render: (u: AdminUserResponse) => <span style={{ fontWeight: 500 }}>{u.fullName}</span> },
     {
@@ -494,6 +615,10 @@ export default function UtilisateursPage() {
           <Button variant="ghost" size="sm" onClick={() => openEdit(u)}>{t("common.update")}</Button>
           <Button variant="ghost" size="sm" onClick={() => openRole(u)}>{t("users.roleAction")}</Button>
           <Button variant="ghost" size="sm" onClick={() => openGoals(u)}>{t("users.goalsAction")}</Button>
+          {/* Réservé SECRETARIAT / SUPER_ADMIN (garde serveur `requireSuperAdminOrSecretariat`). */}
+          {canManageTreasurers && (
+            <Button variant="ghost" size="sm" onClick={() => openTreasurer(u)}>{t("users.treasurerAction")}</Button>
+          )}
           <Button variant="ghost" size="sm" onClick={() => { setPw(""); setPwUser(u); }}>{t("users.password")}</Button>
           <Button variant="danger" size="sm" onClick={() => setDelUser(u)}>{t("users.delete")}</Button>
         </div>
@@ -920,6 +1045,92 @@ export default function UtilisateursPage() {
         </div>
       </Modal>
 
+      {/* Nommer trésorier (lot T3) — une affectation à un nœud, jamais un rang (décision J-1) */}
+      <Modal open={!!treasurerUser} onClose={() => setTreasurerUser(null)} size="lg"
+        title={t("users.treasurerTitle")}
+        sub={treasurerUser ? `${treasurerUser.fullName} · ${userLogin(treasurerUser)}` : undefined}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setTreasurerUser(null)}>{t("common.close")}</Button>
+            <Button variant="primary" disabled={treasurerPicked.length === 0 || assignTreasurerM.isPending}
+              onClick={() => assignTreasurerM.mutate()}>
+              {assignTreasurerM.isPending ? t("common.loading") : t("users.treasurerConfirm")}
+            </Button>
+          </>
+        }>
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <p style={{ margin: 0, fontSize: 13, color: "var(--ink-500)" }}>{t("users.treasurerHint")}</p>
+
+          {/* Affectations en cours */}
+          <div>
+            <h4 style={{ margin: "0 0 8px" }}>{t("users.treasurerCurrent")}</h4>
+            {treasurerAssignmentsQ.isLoading ? (
+              <p style={{ margin: 0, color: "var(--ink-500)" }}>{t("common.loading")}</p>
+            ) : treasurerAssignmentsQ.isError ? (
+              <p style={{ margin: 0, color: "var(--ink-600)" }}>
+                {treasurerAssignmentsQ.error instanceof Error ? treasurerAssignmentsQ.error.message : t("common.error")}
+              </p>
+            ) : treasurerAssignments.length === 0 ? (
+              <p style={{ margin: 0, color: "var(--ink-500)" }}>{t("users.treasurerNone")}</p>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {treasurerAssignments.map((a) => (
+                  <div key={a.id} className="card" style={{ padding: 10, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                    <Badge tone="earth">{t(`subscriptions.level.${NODE_TYPE_TO_LEVEL[a.nodeType]}`)}</Badge>
+                    <span style={{ fontWeight: 500 }}>{a.nodeName ?? "—"}</span>
+                    <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
+                      {a.createdByName && (
+                        <span style={{ fontSize: 12.5, color: "var(--ink-400)" }}>
+                          {t("users.treasurerAppointedBy", { name: a.createdByName })}
+                        </span>
+                      )}
+                      <Button variant="danger" size="sm" disabled={revokeTreasurerM.isPending}
+                        onClick={() => revokeTreasurerM.mutate(a.id)}>
+                        {t("users.treasurerRemove")}
+                      </Button>
+                    </span>
+                  </div>
+                ))}
+                <p style={{ margin: 0, fontSize: 12.5, color: "var(--ink-400)" }}>{t("users.treasurerRevokeHint")}</p>
+              </div>
+            )}
+          </div>
+
+          {/* Choix d'un ou plusieurs nœuds */}
+          <div>
+            <h4 style={{ margin: "0 0 8px" }}>{t("users.treasurerPick")}</h4>
+            {!treasurerMinistryId ? (
+              <p style={{ margin: 0, fontSize: 12.5, color: "var(--earth-700, #8a5a2b)" }}>{t("users.treasurerNeedsMinistry")}</p>
+            ) : treasurerOrgQ.isLoading ? (
+              <p style={{ margin: 0, color: "var(--ink-500)" }}>{t("common.loading")}</p>
+            ) : treasurerOrgQ.isError ? (
+              <p style={{ margin: 0, color: "var(--ink-600)" }}>
+                {treasurerOrgQ.error instanceof Error ? treasurerOrgQ.error.message : t("common.error")}
+              </p>
+            ) : !treasurerTree || treasurerTree.children.length === 0 ? (
+              <p style={{ margin: 0, color: "var(--ink-500)" }}>{t("users.treasurerNoOrg")}</p>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <p style={{ margin: 0, fontSize: 12.5, color: "var(--ink-400)" }}>{t("users.treasurerPickHint")}</p>
+                <div style={{ maxHeight: 300, overflowY: "auto", border: "1px solid var(--line,#eee)", borderRadius: 8, padding: "6px 4px" }}>
+                  <TreasurerTreeRow
+                    node={treasurerTree}
+                    depth={0}
+                    picked={treasurerPicked}
+                    assigned={treasurerNodeIds}
+                    onToggle={toggleTreasurerNode}
+                    t={t}
+                  />
+                </div>
+                <span style={{ fontSize: 12.5, color: "var(--ink-500)" }}>
+                  {t("users.treasurerSelected", { n: treasurerPicked.length })}
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+      </Modal>
+
       {/* Mot de passe */}
       <Modal open={!!pwUser} onClose={() => setPwUser(null)} title={t("users.pwTitle")} sub={pwUser?.fullName}
         footer={<><Button variant="ghost" onClick={() => setPwUser(null)}>{t("common.cancel")}</Button>
@@ -936,5 +1147,80 @@ export default function UtilisateursPage() {
         <p style={{ margin: 0, color: "var(--ink-600)" }}>{t("users.deleteWarning")}</p>
       </Modal>
     </>
+  );
+}
+
+/**
+ * Lot T3 — arbre org à 4 niveaux avec une case à cocher par nœud.
+ *
+ * Jumeau assumé du `TreeRow` de la page Abonnements : même source (`buildTree` de `lib/orgTree`),
+ * même repli/dépli, mêmes libellés `subscriptions.level.*`. Il n'a PAS été factorisé parce que
+ * l'original transporte la couverture des modules (badges actif / hérité / suspendu) dont la
+ * nomination d'un trésorier n'a que faire, et que l'extraire toucherait un écran hors périmètre.
+ * ⚠ Une évolution de l'affichage de l'arbre est donc à porter AUX DEUX endroits.
+ *
+ * La racine MINISTÈRE n'est pas cochable : elle n'existe pas dans `org_node` (l'arbre y commence
+ * à la NATION), une affectation ministère-large n'a donc aucun support côté backend.
+ */
+function TreasurerTreeRow({
+  node, depth, picked, assigned, onToggle, t,
+}: {
+  node: TreeNode;
+  depth: number;
+  picked: string[];
+  /** Nœuds déjà couverts par une affectation active : cochés, verrouillés. */
+  assigned: Set<string>;
+  onToggle: (nodeId: string) => void;
+  t: (k: string) => string;
+}) {
+  const [open, setOpen] = useState(depth < 2);
+  const hasChildren = node.children.length > 0;
+  const selectable = node.level !== "MINISTRY";
+  const already = assigned.has(node.id);
+  const checked = already || picked.includes(node.id);
+  return (
+    <div>
+      <div
+        className="tree-row"
+        style={{
+          display: "flex", alignItems: "center", gap: 6, padding: "6px 8px",
+          paddingLeft: 8 + depth * 18, borderRadius: 8,
+        }}
+      >
+        {hasChildren ? (
+          <span
+            onClick={() => setOpen((v) => !v)}
+            style={{ display: "inline-flex", width: 18, justifyContent: "center", cursor: "pointer", transform: open ? "rotate(90deg)" : "none", transition: "transform .12s" }}
+          >
+            <Icons.ChevRight size={13} />
+          </span>
+        ) : (
+          <span style={{ width: 18 }} />
+        )}
+        {selectable ? (
+          <span style={{ opacity: already ? 0.5 : 1, cursor: already ? "not-allowed" : "pointer" }}>
+            <Checkbox checked={checked} onChange={() => { if (!already) onToggle(node.id); }} />
+          </span>
+        ) : (
+          <span style={{ width: 16 }} />
+        )}
+        <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, color: "var(--ink-400)", minWidth: 62 }}>
+          {t(`subscriptions.level.${node.level}`)}
+        </span>
+        <span style={{ fontWeight: node.level === "MINISTRY" ? 600 : 500 }}>{node.name}</span>
+        {already && <Badge tone="ok">{t("users.treasurerAlready")}</Badge>}
+      </div>
+      {open && hasChildren && node.children.map((c) => (
+        <TreasurerTreeRow
+          key={c.id}
+          node={c}
+          depth={depth + 1}
+          picked={picked}
+          assigned={assigned}
+          onToggle={onToggle}
+          t={t}
+        />
+      ))}
+    </div>
   );
 }
