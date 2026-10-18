@@ -23,6 +23,8 @@ const NAV: NavSection[] = [
       { id: "abonnements", labelKey: "nav.subscriptions", icon: "Currency", path: "/abonnements" },
       // D-ASM-10 (JP 23/09) — référentiel des modules d'enseignement, à côté des Abonnements (§6.1).
       { id: "modules-enseignement", labelKey: "nav.teachingModules", icon: "Folder", path: "/modules-enseignement" },
+      // RG-EVT-01 (JP 14/10) — catalogue des types d'évènement, à côté des modules d'enseignement (§6.1).
+      { id: "types-evenement", labelKey: "nav.eventTypes", icon: "Calendar", path: "/types-evenement" },
     ],
   },
   {

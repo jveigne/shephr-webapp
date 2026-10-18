@@ -15,6 +15,7 @@ import DemandesPage from "@/pages/Demandes";
 import UtilisateursPage from "@/pages/Utilisateurs";
 import AbonnementsPage from "@/pages/Abonnements";
 import ModulesEnseignementPage from "@/pages/ModulesEnseignement";
+import TypesEvenementPage from "@/pages/TypesEvenement";
 import AuditPage from "@/pages/Audit";
 import SettingsPage from "@/pages/Settings";
 
@@ -62,6 +63,8 @@ export default function App() {
               <Route path="/abonnements" element={<Shielded><AbonnementsPage /></Shielded>} />
               {/* D-ASM-10 (JP 23/09) — modules d'enseignement par ministère */}
               <Route path="/modules-enseignement" element={<Shielded><ModulesEnseignementPage /></Shielded>} />
+              {/* RG-EVT-01 (JP 14/10) — types d'évènement par ministère (§6.1 du plan Évènements) */}
+              <Route path="/types-evenement" element={<Shielded><TypesEvenementPage /></Shielded>} />
               <Route
                 path="/goals"
                 element={
