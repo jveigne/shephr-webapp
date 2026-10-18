@@ -48,3 +48,14 @@ export function buildTree(org: OrgData, ministryId: string, ministryName: string
   root.children.push(...org.units.filter((u) => !u.localityId).map(unitNode).sort(byNameFr));
   return root;
 }
+
+/** Parcours en profondeur (ordre de l'arbre), pour un filtre en liste déroulante. */
+export function flattenTree(root: TreeNode | null): Array<{ node: TreeNode; depth: number }> {
+  const out: Array<{ node: TreeNode; depth: number }> = [];
+  const walk = (n: TreeNode, depth: number) => {
+    out.push({ node: n, depth });
+    n.children.forEach((c) => walk(c, depth + 1));
+  };
+  if (root) walk(root, 0);
+  return out;
+}

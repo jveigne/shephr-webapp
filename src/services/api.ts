@@ -34,6 +34,25 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
     ...init,
     headers: authHeaders(init?.headers),
   });
+  return readResponse<T>(res);
+}
+
+/**
+ * Envoi `multipart/form-data` (D-DOC-03, JP 18/10 — dépôt d'un PDF). Surtout PAS d'en-tête
+ * `Content-Type` : le navigateur le pose lui-même avec la frontière (`boundary`) du corps ; le
+ * `application/json` d'`authHeaders` rendrait la requête illisible pour Spring.
+ */
+export async function apiFetchMultipart<T>(path: string, body: FormData, method: "POST" | "PUT" = "POST"): Promise<T> {
+  const token = getStoredToken();
+  const res = await fetch(`${API_URL}${path}`, {
+    method,
+    body,
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  return readResponse<T>(res);
+}
+
+async function readResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let body: any = null;
     try { body = await res.json(); } catch { /* not json */ }

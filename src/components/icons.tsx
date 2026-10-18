@@ -149,6 +149,8 @@ export const Icons = {
   Sort: (p: IconProps) => <I {...p}><path d="M7 4v16M3 8l4-4 4 4" /><path d="M17 20V4M21 16l-4 4-4-4" /></I>,
   Info: (p: IconProps) => <I {...p}><circle cx="12" cy="12" r="9" /><path d="M12 8h0M11 12h1v5h1" /></I>,
   Warning: (p: IconProps) => <I {...p}><path d="M12 3l10 18H2L12 3z" /><path d="M12 10v5M12 18v.5" /></I>,
+  // D-DOC-07 (JP 18/10) — entrée « Documents » du back-office (PDF partagés par lien).
+  Document: (p: IconProps) => <I {...p}><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5" /><path d="M9 13h6M9 17h4" /></I>,
   Folder: (p: IconProps) => <I {...p}><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z" /></I>,
   Tree: (p: IconProps) => <I {...p}><circle cx="6" cy="6" r="2.5" /><circle cx="18" cy="6" r="2.5" /><circle cx="12" cy="18" r="2.5" /><path d="M8 7l3 9M16 7l-3 9" /></I>,
   Inbox: (p: IconProps) => <I {...p}><path d="M3 12l3-7h12l3 7" /><path d="M3 12v6a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-6" /><path d="M3 12h5l1 2h6l1-2h5" /></I>,

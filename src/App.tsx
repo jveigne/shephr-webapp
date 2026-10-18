@@ -16,6 +16,7 @@ import UtilisateursPage from "@/pages/Utilisateurs";
 import AbonnementsPage from "@/pages/Abonnements";
 import ModulesEnseignementPage from "@/pages/ModulesEnseignement";
 import TypesEvenementPage from "@/pages/TypesEvenement";
+import DocumentsPage from "@/pages/Documents";
 import AuditPage from "@/pages/Audit";
 import SettingsPage from "@/pages/Settings";
 
@@ -65,6 +66,8 @@ export default function App() {
               <Route path="/modules-enseignement" element={<Shielded><ModulesEnseignementPage /></Shielded>} />
               {/* RG-EVT-01 (JP 14/10) — types d'évènement par ministère (§6.1 du plan Évènements) */}
               <Route path="/types-evenement" element={<Shielded><TypesEvenementPage /></Shielded>} />
+              {/* D-DOC-07 (JP 18/10) — documents partagés par lien + catégories (§6.1 du plan Liseuse & partage) */}
+              <Route path="/documents" element={<Shielded><DocumentsPage /></Shielded>} />
               <Route
                 path="/goals"
                 element={

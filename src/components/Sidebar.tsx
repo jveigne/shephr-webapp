@@ -25,6 +25,8 @@ const NAV: NavSection[] = [
       { id: "modules-enseignement", labelKey: "nav.teachingModules", icon: "Folder", path: "/modules-enseignement" },
       // RG-EVT-01 (JP 14/10) — catalogue des types d'évènement, à côté des modules d'enseignement (§6.1).
       { id: "types-evenement", labelKey: "nav.eventTypes", icon: "Calendar", path: "/types-evenement" },
+      // D-DOC-07 (JP 18/10) — documents partagés par lien + catégories, à côté des types d'évènement (§6.1).
+      { id: "documents", labelKey: "nav.documents", icon: "Document", path: "/documents" },
     ],
   },
   {
