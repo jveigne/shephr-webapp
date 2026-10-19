@@ -4,6 +4,8 @@ import { Trans, useTranslation } from "react-i18next";
 import { Icons } from "@/components/icons";
 import { Badge, Button, Checkbox, Drawer, Field, IconButton, Input, Modal, Select, Table, Toggle, TopBar } from "@/components/primitives";
 import { ScopeTreePicker, type ScopeValue } from "@/components/ScopeTreePicker";
+import { FolderEntry, FolderTreeList, FolderTreePicker } from "@/components/FolderTree";
+import { buildFolderIndex, folderPath, folderPathLabel, moveBlock, subtreeIds, useFolderLabel, type FolderIndex, type FolderNode } from "@/lib/documentFolders";
 import { useMinistryTree } from "@/hooks/useMinistryTree";
 import { flattenTree } from "@/lib/orgTree";
 import { useToasts } from "@/context/ToastContext";
@@ -11,6 +13,7 @@ import { useDebounced } from "@/hooks/useDebounced";
 import { apiErrorCode } from "@/services/api";
 import { listMinistries } from "@/services/ministryService";
 import {
+  DOCUMENT_FOLDER_MAX_DEPTH,
   DOCUMENT_LANGUAGES,
   DOCUMENT_LIMITS,
   DOCUMENT_MAX_BYTES,
@@ -42,8 +45,15 @@ import {
 // (`freePages`, borné par le nombre de pages lu par le backend) et s'il est libre (`open`,
 // D-DOC-06), puis publie : le lien universel `/d/{slug}` s'affiche avec « Copier ». Le front ne
 // compose jamais le lien : il affiche `shareUrl` tel que le backend le rend (§7.3 du contrat).
+//
+// D-DOC-16 (JP 19/10) — les catégories deviennent des DOSSIERS hiérarchiques façon Drive (3 niveaux
+// au plus, par ministère) : l'onglet « Catégories » disparaît au profit d'une vue intégrée — arbre
+// des dossiers à gauche (« Tous les documents », « Sans dossier », puis l'arbre), documents du
+// dossier sélectionné à droite sous un fil d'Ariane. Déplacer un document = changer son dossier
+// dans le formulaire (pas de glisser-déposer).
 
-type Tab = "documents" | "categories";
+/** D-DOC-16 — sélection de la colonne de gauche : tout, les documents sans dossier, ou un dossier (id). */
+type FolderSel = "ALL" | "NONE" | string;
 const errorStyle = { color: "var(--err)", fontSize: 13 } as const;
 /** Ordre d'affichage des catégories : le backend le lit en `Integer` ; borne réaliste (cf. TypesEvenement). */
 const ORDER_MAX = 9999;
@@ -163,10 +173,11 @@ export default function DocumentsPage() {
   const lang = (i18n.resolvedLanguage || i18n.language) === "en" ? "en" : "fr";
   const dateLocale = lang === "en" ? "en-GB" : "fr-FR";
 
-  const [tab, setTab] = useState<Tab>("documents");
   const [ministryId, setMinistryId] = useState("");
   const [scopeKey, setScopeKey] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState("");
+  const [folderSel, setFolderSel] = useState<FolderSel>("ALL");
+  /** D-DOC-16 — un dossier sélectionné montre ses documents directs ; coché, aussi ceux de ses sous-dossiers. */
+  const [includeSub, setIncludeSub] = useState(false);
   const [statusFilter, setStatusFilter] = useState<"" | DocumentStatus>("");
   const [search, setSearch] = useState("");
   const q = useDebounced(search);
@@ -195,26 +206,36 @@ export default function DocumentsPage() {
     queryKey: ["document-categories", ministryId],
     queryFn: () => listDocumentCategories(ministryId || undefined),
   });
+  // D-DOC-16 — le filtre par dossier est appliqué côté front sur la liste (non paginée, §3.3) :
+  // le backend ne filtre que le dossier exact, or il faut aussi « Sans dossier » et « inclure les
+  // sous-dossiers ». Changer de dossier ne recharge donc rien.
   const docsQ = useQuery({
-    queryKey: ["documents", ministryId, scopeKey, categoryFilter, statusFilter, q],
+    queryKey: ["documents", ministryId, scopeKey, statusFilter, q],
     queryFn: () => listDocuments({
       ministryId: ministryId || undefined,
       ...scopeFilter,
-      categoryId: categoryFilter || undefined,
       status: statusFilter || undefined,
       q,
     }),
   });
+  const folderIndex = useMemo(() => buildFolderIndex(categoriesQ.data ?? []), [categoriesQ.data]);
+  /** Dossier sélectionné, s'il existe encore (supprimé ailleurs → retour à « Tous les documents »). */
+  const selectedNode: FolderNode | undefined =
+    folderSel !== "ALL" && folderSel !== "NONE" && ministryId ? folderIndex.byId.get(folderSel) : undefined;
+  const effectiveSel: FolderSel = selectedNode ? selectedNode.folder.id : folderSel === "NONE" ? "NONE" : "ALL";
 
   const errText = (e: unknown): string => {
     const code = apiErrorCode(e);
     if (code && i18n.exists(errKey(code))) return t(errKey(code));
     return e instanceof Error ? e.message : t("common.error");
   };
-  const categoryLabel = (c: { name: string | null; nameEn: string | null } | null | undefined) =>
-    !c || !c.name ? t("common.dash") : lang === "en" ? c.nameEn ?? c.name : c.name;
-  const docCategoryLabel = (d: AdminDocument) =>
-    d.categoryId ? categoryLabel({ name: d.categoryName, nameEn: d.categoryNameEn }) : t("documents.noCategory");
+  const folderLabel = useFolderLabel();
+  /** D-DOC-16 — chemin complet du dossier d'un document ; repli sur le libellé recopié dans le document. */
+  const docFolderLabel = (d: AdminDocument) => {
+    if (!d.categoryId) return t("documents.folders.noFolder");
+    if (folderIndex.byId.has(d.categoryId)) return folderPathLabel(folderIndex, d.categoryId, folderLabel);
+    return d.categoryName ? folderLabel({ name: d.categoryName, nameEn: d.categoryNameEn }) : t("common.dash");
+  };
   const scopeLabel = (level: DocumentScopeLevel, name: string | null) =>
     level === "MINISTRY" ? t("documents.scopeWholeMinistry") : name ?? t("common.dash");
   const fmtDateTime = (iso: string | null) => {
@@ -228,7 +249,8 @@ export default function DocumentsPage() {
   const changeMinistry = (id: string) => {
     setMinistryId(id);
     setScopeKey("");
-    setCategoryFilter("");
+    setFolderSel("ALL");
+    setIncludeSub(false);
   };
 
   const copy = (url: string) => {
@@ -277,7 +299,8 @@ export default function DocumentsPage() {
     setCreateMinistry(ministryId);
     setCreateFile(null);
     setFileError(null);
-    setMeta(emptyMeta());
+    // D-DOC-16 (JP 19/10) — déposer depuis un dossier sélectionné le range dans ce dossier.
+    setMeta({ ...emptyMeta(), categoryId: selectedNode ? selectedNode.folder.id : "" });
     setPreview({ freePages: "", open: false, expiresAt: "" });
     setCreated(null);
     setCreateOpen(true);
@@ -353,6 +376,8 @@ export default function DocumentsPage() {
     queryFn: () => listDocumentCategories(editing!.ministryId),
     enabled: !!editing,
   });
+  const createFolderIndex = useMemo(() => buildFolderIndex(formCategoriesQ.data ?? []), [formCategoriesQ.data]);
+  const editFolderIndex = useMemo(() => buildFolderIndex(editCategoriesQ.data ?? []), [editCategoriesQ.data]);
   const openEdit = (d: AdminDocument) => {
     setEditing(d);
     setEditMeta(metaOf(d));
@@ -437,7 +462,13 @@ export default function DocumentsPage() {
   // -------------------------------------------------------------------------------------------
   // Rendu — liste des documents
   // -------------------------------------------------------------------------------------------
-  const docs = useMemo(() => docsQ.data ?? [], [docsQ.data]);
+  const allDocs = useMemo(() => docsQ.data ?? [], [docsQ.data]);
+  const docs = useMemo(() => {
+    if (effectiveSel === "ALL") return allDocs;
+    if (effectiveSel === "NONE" || !selectedNode) return allDocs.filter((d) => !d.categoryId);
+    const ids = includeSub ? subtreeIds(selectedNode) : new Set([selectedNode.folder.id]);
+    return allDocs.filter((d) => !!d.categoryId && ids.has(d.categoryId));
+  }, [allDocs, effectiveSel, selectedNode, includeSub]);
   const totals = useMemo(() => docs.reduce(
     (acc, d) => ({
       opens: acc.opens + d.stats.opens,
@@ -484,7 +515,7 @@ export default function DocumentsPage() {
         </div>
       ),
     },
-    { label: t("documents.colCategory"), render: (d: AdminDocument) => <span style={{ color: "var(--ink-700)" }}>{docCategoryLabel(d)}</span> },
+    { label: t("documents.folders.col"), render: (d: AdminDocument) => <span style={{ color: "var(--ink-700)" }}>{docFolderLabel(d)}</span> },
     {
       label: t("documents.colPreview"),
       cellStyle: { whiteSpace: "nowrap" as const },
@@ -517,28 +548,38 @@ export default function DocumentsPage() {
   ];
 
   // -------------------------------------------------------------------------------------------
-  // Catégories (RG-FOLDER-03)
+  // Dossiers (RG-FOLDER-03, D-DOC-16 JP 19/10) — création, renommage, déplacement, (dés)activation,
+  // suppression. Routes /admin/document-categories inchangées.
   // -------------------------------------------------------------------------------------------
   const [catEditing, setCatEditing] = useState<DocumentCategory | null>(null);
+  /** Parent du dossier en création (null = premier niveau). */
+  const [catParent, setCatParent] = useState<DocumentCategory | null>(null);
   const [catOpen, setCatOpen] = useState(false);
   const [catForm, setCatForm] = useState({ ministryId: "", name: "", nameEn: "", displayOrder: "" });
   const [catDeleting, setCatDeleting] = useState<DocumentCategory | null>(null);
-  const [catDeleteBlocked, setCatDeleteBlocked] = useState(false);
+  /** Suppression refusée : sous-dossiers (DOC_FOLDER_NOT_EMPTY) ou documents (DOC_CATEGORY_IN_USE → désactiver). */
+  const [catDeleteBlocked, setCatDeleteBlocked] = useState<null | "children" | "documents">(null);
+  const [moving, setMoving] = useState<DocumentCategory | null>(null);
+  /** Nouveau parent choisi ; `undefined` = pas encore choisi, `null` = premier niveau. */
+  const [moveTarget, setMoveTarget] = useState<string | null | undefined>(undefined);
 
-  const openCatCreate = () => {
+  const openCatCreate = (parent: DocumentCategory | null) => {
     setCatEditing(null);
-    setCatForm({ ministryId, name: "", nameEn: "", displayOrder: "" });
+    setCatParent(parent);
+    setCatForm({ ministryId: parent?.ministryId ?? ministryId, name: "", nameEn: "", displayOrder: "" });
     setCatOpen(true);
   };
   const openCatEdit = (c: DocumentCategory) => {
     setCatEditing(c);
+    setCatParent(null);
     setCatForm({ ministryId: c.ministryId, name: c.name, nameEn: c.nameEn ?? "", displayOrder: String(c.displayOrder) });
     setCatOpen(true);
   };
+  const openMove = (c: DocumentCategory) => { setMoving(c); setMoveTarget(undefined); };
 
   const catSaveM = useMutation({
-    mutationFn: async (v: { editing: DocumentCategory | null; form: typeof catForm }): Promise<DocumentCategory> => {
-      const { editing, form } = v;
+    mutationFn: async (v: { editing: DocumentCategory | null; parent: DocumentCategory | null; form: typeof catForm }): Promise<DocumentCategory> => {
+      const { editing, parent, form } = v;
       const order = parseOrder(form.displayOrder);
       if (!editing) {
         return createDocumentCategory({
@@ -546,6 +587,7 @@ export default function DocumentsPage() {
           name: form.name.trim(),
           nameEn: opt(form.nameEn),
           displayOrder: order ?? undefined,
+          parentId: parent?.id ?? null,
         });
       }
       // PATCH : champs absents = inchangés ; `nameEn: ""` retire le libellé anglais (§3.2).
@@ -557,10 +599,10 @@ export default function DocumentsPage() {
     },
     onSuccess: (c, v) => {
       invalidateCategories();
-      // Le libellé de catégorie est recopié dans chaque AdminDocument.
+      // Le libellé du dossier est recopié dans chaque AdminDocument.
       if (v.editing) invalidateDocs();
       setCatOpen(false);
-      push({ kind: "ok", title: v.editing ? t("documents.categoryUpdatedToast") : t("documents.categoryCreatedToast"), msg: c.name });
+      push({ kind: "ok", title: v.editing ? t("documents.folders.updatedToast") : t("documents.folders.createdToast"), msg: c.name });
     },
     onError: (e: unknown, v) => {
       invalidateCategories();
@@ -569,27 +611,49 @@ export default function DocumentsPage() {
     },
   });
 
+  const moveM = useMutation({
+    // D-DOC-16 — PATCH `parentId` présent = déplacement (`null` = premier niveau).
+    mutationFn: (v: { folder: DocumentCategory; parentId: string | null }) => updateDocumentCategory(v.folder.id, { parentId: v.parentId }),
+    onSuccess: (c) => {
+      invalidateCategories();
+      setMoving(null);
+      push({ kind: "ok", title: t("documents.folders.movedToast"), msg: c.name });
+    },
+    onError: (e: unknown) => {
+      invalidateCategories();
+      push({ kind: "error", title: t("documents.folders.moveFailToast"), msg: errText(e) });
+      if (apiErrorCode(e) === "RESOURCE_NOT_FOUND") setMoving(null);
+    },
+  });
+
   const catToggleM = useMutation({
     mutationFn: (v: { id: string; active: boolean }) => updateDocumentCategory(v.id, { active: v.active }),
     onSuccess: (c) => {
       invalidateCategories();
-      push({ kind: "ok", title: c.active ? t("documents.categoryActivatedToast") : t("documents.categoryDeactivatedToast"), msg: c.name });
+      push({ kind: "ok", title: c.active ? t("documents.folders.activatedToast") : t("documents.folders.deactivatedToast"), msg: c.name });
     },
     onError: (e: unknown) => { invalidateCategories(); push({ kind: "error", title: t("common.failure"), msg: errText(e) }); },
   });
 
-  const closeCatDelete = () => { setCatDeleting(null); setCatDeleteBlocked(false); };
+  const closeCatDelete = () => { setCatDeleting(null); setCatDeleteBlocked(null); };
+  const openCatDelete = (c: DocumentCategory) => {
+    setCatDeleting(c);
+    setCatDeleteBlocked(c.childCount > 0 ? "children" : c.inUse ? "documents" : null);
+  };
   const catDeleteM = useMutation({
     mutationFn: (c: DocumentCategory) => deleteDocumentCategory(c.id),
     onSuccess: (_, c) => {
       invalidateCategories();
       closeCatDelete();
-      push({ kind: "ok", title: t("documents.categoryDeletedToast"), msg: c.name });
+      // Le dossier affiché disparaît : on remonte à son parent.
+      if (folderSel === c.id) setFolderSel(c.parentId ?? "ALL");
+      push({ kind: "ok", title: t("documents.folders.deletedToast"), msg: c.name });
     },
     onError: (e: unknown) => {
       invalidateCategories();
-      // Un document a pu la référencer depuis le chargement : on bascule sur « désactiver ».
-      if (apiErrorCode(e) === "DOC_CATEGORY_IN_USE") { setCatDeleteBlocked(true); return; }
+      // Un sous-dossier ou un document a pu y être rangé depuis le chargement.
+      if (apiErrorCode(e) === "DOC_FOLDER_NOT_EMPTY") { setCatDeleteBlocked("children"); return; }
+      if (apiErrorCode(e) === "DOC_CATEGORY_IN_USE") { setCatDeleteBlocked("documents"); return; }
       push({ kind: "error", title: t("documents.deleteFailToast"), msg: errText(e) });
       if (apiErrorCode(e) === "RESOURCE_NOT_FOUND") closeCatDelete();
     },
@@ -597,67 +661,33 @@ export default function DocumentsPage() {
   const catDeleteBusy = catDeleteM.isPending || catToggleM.isPending;
 
   const catOrderError = (catEditing || catForm.displayOrder.trim() !== "") && parseOrder(catForm.displayOrder) == null
-    ? t("documents.categoryOrderInvalid", { max: ORDER_MAX })
+    ? t("documents.folders.orderInvalid", { max: ORDER_MAX })
     : null;
   const catCanSave = !!catForm.ministryId && !!catForm.name.trim() && !catOrderError && !catSaveM.isPending;
 
-  const categoryRows = useMemo(() => {
-    const list = categoriesQ.data ?? [];
-    if (ministryId) return list;
-    return [...list].sort((a, b) =>
-      ministryName(a.ministryId).localeCompare(ministryName(b.ministryId))
-      || a.displayOrder - b.displayOrder
-      || a.name.localeCompare(b.name));
-  }, [categoriesQ.data, ministryId, ministryName]);
+  /** Raison pour laquelle un dossier ne peut pas être supprimé depuis l'en-tête (null = supprimable). */
+  const deleteBlockReason = (c: DocumentCategory) =>
+    c.childCount > 0 ? t("documents.folders.deleteBlockedChildren")
+      : c.documentCount > 0 ? t("documents.folders.deleteBlockedDocuments")
+      : null;
 
-  const catCols = [
-    { label: t("documents.categoryColOrder"), style: { width: 1 }, render: (c: DocumentCategory) => <span className="mono" style={{ color: "var(--ink-500)" }}>{c.displayOrder}</span> },
-    {
-      label: t("documents.categoryColName"),
-      render: (c: DocumentCategory) => (
-        <div>
-          <div style={{ fontWeight: 500, color: "var(--ink-900)" }}>{c.name}</div>
-          <div style={{ fontSize: 12.5, color: "var(--ink-500)" }}>{c.nameEn ?? t("documents.categoryNoNameEn")}</div>
-        </div>
-      ),
-    },
-    ...(ministryId
-      ? []
-      : [{ label: t("documents.colMinistry"), render: (c: DocumentCategory) => <span style={{ color: "var(--ink-700)" }}>{ministryName(c.ministryId)}</span> }]),
-    {
-      label: t("documents.colStatus"),
-      cellStyle: { whiteSpace: "nowrap" as const },
-      render: (c: DocumentCategory) => (
-        <div style={{ display: "flex", gap: 6 }}>
-          {c.active ? <Badge tone="ok" dot>{t("documents.categoryActive")}</Badge> : <Badge tone="gray" dot>{t("documents.categoryInactive")}</Badge>}
-          {c.inUse && <Badge tone="earth">{t("documents.categoryInUseBadge")}</Badge>}
-        </div>
-      ),
-    },
-    {
-      label: "",
-      style: { width: 1 },
-      cellStyle: { whiteSpace: "nowrap" as const },
-      render: (c: DocumentCategory) => (
-        <div style={{ display: "flex", alignItems: "center", gap: 12, justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
-          <Toggle checked={c.active} onChange={(v) => catToggleM.mutate({ id: c.id, active: v })} label={t("documents.categoryActive")} />
-          <IconButton icon={<Icons.Edit size={15} />} title={t("documents.edit")} onClick={() => openCatEdit(c)} />
-          <IconButton
-            icon={<Icons.Trash size={15} />}
-            danger
-            title={c.inUse ? t("documents.categoryInUseHint") : t("documents.delete")}
-            onClick={() => { setCatDeleting(c); setCatDeleteBlocked(c.inUse); }}
-          />
-        </div>
-      ),
-    },
-  ];
+  // Déplacement : ouvert depuis l'en-tête d'un dossier sélectionné, donc ministère filtré —
+  // `folderIndex` ne contient que les dossiers de ce ministère.
+  const movingNode = moving ? folderIndex.byId.get(moving.id) : undefined;
+  const moveReason = (n: FolderNode) => {
+    if (!movingNode) return null;
+    const block = moveBlock(movingNode, n.folder);
+    return block === "cycle" ? t("documents.folders.moveCycle") : block === "tooDeep" ? t("documents.folders.moveTooDeep") : null;
+  };
+  const moveChanged = moveTarget !== undefined && !!moving && moveTarget !== moving.parentId;
 
   // -------------------------------------------------------------------------------------------
   // JSX
   // -------------------------------------------------------------------------------------------
-  const createCategories = formCategoriesQ.data ?? [];
   const createMinistryName = createMinistry ? ministryName(createMinistry) : "";
+  const selectedFolder = selectedNode?.folder ?? null;
+  const filtersActive = !!(ministryId || scopeKey || effectiveSel !== "ALL" || statusFilter || q);
+  const crumbLink = { background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--green-800)", font: "inherit" } as const;
 
   return (
     <>
@@ -665,26 +695,16 @@ export default function DocumentsPage() {
         title={t("documents.title")}
         crumbs={[t("common.jexcellence"), t("documents.title")]}
         actions={
-          tab === "documents" ? (
+          <div style={{ display: "flex", gap: 8 }}>
+            <Button variant="secondary" iconL={<Icons.Folder size={15} />} onClick={() => openCatCreate(null)}>{t("documents.folders.newFolder")}</Button>
             <Button variant="primary" iconL={<Icons.Upload size={15} />} onClick={openCreate}>{t("documents.newDocument")}</Button>
-          ) : (
-            <Button variant="primary" iconL={<Icons.Plus size={15} />} onClick={openCatCreate}>{t("documents.newCategory")}</Button>
-          )
+          </div>
         }
       />
       <div className="content">
         <p className="section-sub">
           <Trans i18nKey="documents.intro" components={{ strong: <strong /> }} />
         </p>
-
-        <div className="tabs">
-          <button className={`tab ${tab === "documents" ? "active" : ""}`} onClick={() => setTab("documents")}>
-            <Icons.Folder size={15} />{t("documents.tabDocuments")}
-          </button>
-          <button className={`tab ${tab === "categories" ? "active" : ""}`} onClick={() => setTab("categories")}>
-            <Icons.Tag size={15} />{t("documents.tabCategories")}
-          </button>
-        </div>
 
         <div className="card" style={{ padding: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderBottom: "1px solid var(--line)", flexWrap: "wrap" }}>
@@ -693,86 +713,162 @@ export default function DocumentsPage() {
               <option value="">{t("documents.allMinistries")}</option>
               {ministries.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
             </Select>
-            {tab === "documents" && (
-              <>
-                <Select
-                  value={scopeKey}
-                  onChange={(e) => setScopeKey(e.target.value)}
-                  disabled={!ministryId}
-                  title={ministryId ? undefined : t("documents.filterNeedsMinistry")}
-                >
-                  <option value="">{t("documents.allScopes")}</option>
-                  {scopeOptions.map(({ node, depth }) => (
-                    <option key={`${node.level}:${node.id}`} value={node.level === "MINISTRY" ? "MINISTRY" : `${node.level}:${node.id}`}>
-                      {`${"  ".repeat(depth)}${node.level === "MINISTRY" ? t("documents.scopeWholeMinistry") : node.name}`}
-                    </option>
-                  ))}
-                </Select>
-                <Select
-                  value={categoryFilter}
-                  onChange={(e) => setCategoryFilter(e.target.value)}
-                  disabled={!ministryId}
-                  title={ministryId ? undefined : t("documents.filterNeedsMinistry")}
-                >
-                  <option value="">{t("documents.allCategories")}</option>
-                  {(ministryId ? categoriesQ.data ?? [] : []).map((c) => <option key={c.id} value={c.id}>{categoryLabel(c)}</option>)}
-                </Select>
-                <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as "" | DocumentStatus)}>
-                  <option value="">{t("documents.allStatuses")}</option>
-                  {DOCUMENT_STATUSES.map((s) => <option key={s} value={s}>{t(`documents.status.${s}`)}</option>)}
-                </Select>
-                <div style={{ minWidth: 220, flex: 1 }}>
-                  <Input
-                    icon={<Icons.Search size={15} />}
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder={t("documents.searchPlaceholder")}
-                  />
-                </div>
-              </>
-            )}
+            <Select
+              value={scopeKey}
+              onChange={(e) => setScopeKey(e.target.value)}
+              disabled={!ministryId}
+              title={ministryId ? undefined : t("documents.filterNeedsMinistry")}
+            >
+              <option value="">{t("documents.allScopes")}</option>
+              {scopeOptions.map(({ node, depth }) => (
+                <option key={`${node.level}:${node.id}`} value={node.level === "MINISTRY" ? "MINISTRY" : `${node.level}:${node.id}`}>
+                  {`${"  ".repeat(depth)}${node.level === "MINISTRY" ? t("documents.scopeWholeMinistry") : node.name}`}
+                </option>
+              ))}
+            </Select>
+            <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as "" | DocumentStatus)}>
+              <option value="">{t("documents.allStatuses")}</option>
+              {DOCUMENT_STATUSES.map((s) => <option key={s} value={s}>{t(`documents.status.${s}`)}</option>)}
+            </Select>
+            <div style={{ minWidth: 220, flex: 1 }}>
+              <Input
+                icon={<Icons.Search size={15} />}
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={t("documents.searchPlaceholder")}
+              />
+            </div>
             {ministriesQ.isError && <span style={errorStyle}>{t("documents.ministriesLoadError", { error: errText(ministriesQ.error) })}</span>}
           </div>
 
-          {tab === "documents" ? (
-            docsQ.isLoading ? (
-              <div style={{ padding: 24, color: "var(--ink-500)" }}>{t("common.loading")}</div>
-            ) : docsQ.isError ? (
-              <div style={{ padding: 24, color: "var(--err)", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                <span>{t("documents.loadError", { error: errText(docsQ.error) })}</span>
-                <Button size="sm" variant="secondary" onClick={() => docsQ.refetch()}>{t("common.retry")}</Button>
-              </div>
-            ) : docs.length === 0 ? (
-              <div style={{ padding: 40, textAlign: "center", color: "var(--ink-500)" }}>
-                {ministryId || scopeKey || categoryFilter || statusFilter || q ? t("documents.emptyFiltered") : t("documents.empty")}
-              </div>
-            ) : (
-              <>
-                {/* §5.1 bis — compteurs du journal : seul « tableau de bord » de la V1. */}
-                <div style={{ display: "flex", gap: 18, padding: "10px 16px", borderBottom: "1px solid var(--line-soft)", flexWrap: "wrap", fontSize: 13, color: "var(--ink-500)" }}>
-                  <span>{t("documents.totalsDocuments", { count: docs.length })}</span>
-                  <span>{t("documents.totalsOpens", { count: totals.opens })}</span>
-                  <span>{t("documents.totalsWalls", { count: totals.walls })}</span>
-                  <span>{t("documents.totalsInstallClicks", { count: totals.installClicks })}</span>
-                  <span>{t("documents.totalsShares", { count: totals.shares })}</span>
+          <div style={{ display: "grid", gridTemplateColumns: "260px minmax(0, 1fr)", alignItems: "stretch" }}>
+            {/* ---- D-DOC-16 : arbre des dossiers ---- */}
+            <nav role="tree" aria-label={t("documents.folders.navTitle")} style={{ borderRight: "1px solid var(--line)", padding: 8, minHeight: 240 }}>
+              <div style={{ ...sectionTitle, padding: "4px 8px 6px", marginBottom: 0 }}>{t("documents.folders.navTitle")}</div>
+              <FolderEntry
+                icon={<Icons.Document size={14} />}
+                label={t("documents.folders.allDocuments")}
+                selected={effectiveSel === "ALL"}
+                onClick={() => setFolderSel("ALL")}
+              />
+              <FolderEntry
+                icon={<Icons.Inbox size={14} />}
+                label={t("documents.folders.noFolder")}
+                selected={effectiveSel === "NONE"}
+                onClick={() => setFolderSel("NONE")}
+              />
+              <div style={{ borderTop: "1px solid var(--line-soft)", margin: "6px 0" }} />
+              {!ministryId ? (
+                <div style={{ padding: "6px 8px", fontSize: 13, color: "var(--ink-500)" }}>{t("documents.folders.pickMinistry")}</div>
+              ) : categoriesQ.isLoading ? (
+                <div style={{ padding: "6px 8px", fontSize: 13, color: "var(--ink-500)" }}>{t("common.loading")}</div>
+              ) : categoriesQ.isError ? (
+                <div style={{ padding: "6px 8px", fontSize: 13, color: "var(--err)", display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-start" }}>
+                  <span>{t("documents.folders.loadError", { error: errText(categoriesQ.error) })}</span>
+                  <Button size="sm" variant="secondary" onClick={() => categoriesQ.refetch()}>{t("common.retry")}</Button>
                 </div>
-                <Table columns={cols} rows={docs.map((d) => ({ ...d, _key: d.id }))} onRowClick={(d) => setDetail(d)} />
-              </>
-            )
-          ) : categoriesQ.isLoading ? (
-            <div style={{ padding: 24, color: "var(--ink-500)" }}>{t("common.loading")}</div>
-          ) : categoriesQ.isError ? (
-            <div style={{ padding: 24, color: "var(--err)", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-              <span>{t("documents.categoriesLoadError", { error: errText(categoriesQ.error) })}</span>
-              <Button size="sm" variant="secondary" onClick={() => categoriesQ.refetch()}>{t("common.retry")}</Button>
+              ) : folderIndex.roots.length === 0 ? (
+                <div style={{ padding: "6px 8px", fontSize: 13, color: "var(--ink-500)" }}>{t("documents.folders.empty")}</div>
+              ) : (
+                <FolderTreeList
+                  index={folderIndex}
+                  selectedId={selectedFolder?.id ?? null}
+                  onSelect={(f) => setFolderSel(f.id)}
+                  label={folderLabel}
+                  meta={(n) => n.folder.documentCount > 0
+                    ? <span className="mono" style={{ fontSize: 11.5, color: "var(--ink-400)" }}>{n.folder.documentCount}</span>
+                    : null}
+                />
+              )}
+            </nav>
+
+            {/* ---- Documents du dossier sélectionné ---- */}
+            <div style={{ minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 16px", borderBottom: "1px solid var(--line-soft)", flexWrap: "wrap", minHeight: 48 }}>
+                <nav aria-label={t("documents.folders.breadcrumb")} style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", fontSize: 14 }}>
+                  {effectiveSel === "ALL" ? (
+                    <strong style={{ fontWeight: 600 }}>{t("documents.folders.allDocuments")}</strong>
+                  ) : (
+                    <button type="button" style={crumbLink} onClick={() => setFolderSel("ALL")}>{t("documents.folders.allDocuments")}</button>
+                  )}
+                  {effectiveSel === "NONE" && (
+                    <><span style={{ color: "var(--ink-400)" }}>›</span><strong style={{ fontWeight: 600 }}>{t("documents.folders.noFolder")}</strong></>
+                  )}
+                  {selectedFolder && folderPath(folderIndex, selectedFolder.id).map((f) => (
+                    <span key={f.id} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ color: "var(--ink-400)" }}>›</span>
+                      {f.id === selectedFolder.id
+                        ? <strong style={{ fontWeight: 600 }}>{folderLabel(f)}</strong>
+                        : <button type="button" style={crumbLink} onClick={() => setFolderSel(f.id)}>{folderLabel(f)}</button>}
+                    </span>
+                  ))}
+                </nav>
+                {selectedFolder && selectedNode && selectedNode.children.length > 0 && (
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--ink-700)", cursor: "pointer" }}>
+                    <Checkbox checked={includeSub} onChange={setIncludeSub} />
+                    <span onClick={() => setIncludeSub((v) => !v)}>{t("documents.folders.includeSubfolders")}</span>
+                  </label>
+                )}
+                <span style={{ flex: 1 }} />
+                {selectedFolder && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <span title={selectedFolder.depth >= DOCUMENT_FOLDER_MAX_DEPTH ? t("documents.folders.maxDepthHint") : undefined}>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        iconL={<Icons.Plus size={14} />}
+                        disabled={selectedFolder.depth >= DOCUMENT_FOLDER_MAX_DEPTH}
+                        onClick={() => openCatCreate(selectedFolder)}
+                      >
+                        {t("documents.folders.newSubfolder")}
+                      </Button>
+                    </span>
+                    <Button size="sm" variant="ghost" iconL={<Icons.Edit size={14} />} onClick={() => openCatEdit(selectedFolder)}>{t("documents.folders.rename")}</Button>
+                    <Button size="sm" variant="ghost" iconL={<Icons.ArrowRight size={14} />} onClick={() => openMove(selectedFolder)}>{t("documents.folders.move")}</Button>
+                    <Toggle
+                      checked={selectedFolder.active}
+                      onChange={(v) => catToggleM.mutate({ id: selectedFolder.id, active: v })}
+                      label={t("documents.folders.active")}
+                    />
+                    <span title={deleteBlockReason(selectedFolder) ?? undefined}>
+                      <IconButton
+                        icon={<Icons.Trash size={15} />}
+                        danger
+                        title={deleteBlockReason(selectedFolder) ?? t("documents.delete")}
+                        disabled={!!deleteBlockReason(selectedFolder)}
+                        onClick={() => openCatDelete(selectedFolder)}
+                      />
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {docsQ.isLoading ? (
+                <div style={{ padding: 24, color: "var(--ink-500)" }}>{t("common.loading")}</div>
+              ) : docsQ.isError ? (
+                <div style={{ padding: 24, color: "var(--err)", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                  <span>{t("documents.loadError", { error: errText(docsQ.error) })}</span>
+                  <Button size="sm" variant="secondary" onClick={() => docsQ.refetch()}>{t("common.retry")}</Button>
+                </div>
+              ) : docs.length === 0 ? (
+                <div style={{ padding: 40, textAlign: "center", color: "var(--ink-500)" }}>
+                  {selectedFolder ? t("documents.folders.emptyFolder") : filtersActive ? t("documents.emptyFiltered") : t("documents.empty")}
+                </div>
+              ) : (
+                <>
+                  {/* §5.1 bis — compteurs du journal : seul « tableau de bord » de la V1. */}
+                  <div style={{ display: "flex", gap: 18, padding: "10px 16px", borderBottom: "1px solid var(--line-soft)", flexWrap: "wrap", fontSize: 13, color: "var(--ink-500)" }}>
+                    <span>{t("documents.totalsDocuments", { count: docs.length })}</span>
+                    <span>{t("documents.totalsOpens", { count: totals.opens })}</span>
+                    <span>{t("documents.totalsWalls", { count: totals.walls })}</span>
+                    <span>{t("documents.totalsInstallClicks", { count: totals.installClicks })}</span>
+                    <span>{t("documents.totalsShares", { count: totals.shares })}</span>
+                  </div>
+                  <Table columns={cols} rows={docs.map((d) => ({ ...d, _key: d.id }))} onRowClick={(d) => setDetail(d)} />
+                </>
+              )}
             </div>
-          ) : categoryRows.length === 0 ? (
-            <div style={{ padding: 40, textAlign: "center", color: "var(--ink-500)" }}>
-              {ministryId ? t("documents.categoriesEmptyMinistry") : t("documents.categoriesEmpty")}
-            </div>
-          ) : (
-            <Table columns={catCols} rows={categoryRows.map((c) => ({ ...c, _key: c.id }))} onRowClick={openCatEdit} />
-          )}
+          </div>
         </div>
       </div>
 
@@ -843,7 +939,7 @@ export default function DocumentsPage() {
               <div style={sectionTitle}>{t("documents.infoTitle")}</div>
               <dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "6px 14px", margin: 0, fontSize: 13.5 }}>
                 <InfoRow label={t("documents.colScope")} value={`${t(`subscriptions.level.${detail.scopeLevel}`)} · ${scopeLabel(detail.scopeLevel, detail.scopeName)}`} />
-                <InfoRow label={t("documents.colCategory")} value={docCategoryLabel(detail)} />
+                <InfoRow label={t("documents.folders.col")} value={docFolderLabel(detail)} />
                 <InfoRow label={t("documents.authorLabel")} value={detail.author ?? t("common.dash")} />
                 <InfoRow label={t("documents.languageLabel")} value={detail.language ? t(`documents.language.${detail.language}`) : t("common.dash")} />
                 <InfoRow
@@ -945,8 +1041,8 @@ export default function DocumentsPage() {
               setMeta={setMeta}
               ministryId={createMinistry}
               ministryName={createMinistryName}
-              categories={createCategories}
-              categoryLabel={categoryLabel}
+              folders={createFolderIndex}
+              foldersLoading={formCategoriesQ.isLoading}
               disabled={createBusy}
             />
           </div>
@@ -993,8 +1089,8 @@ export default function DocumentsPage() {
               setMeta={setEditMeta}
               ministryId={editing.ministryId}
               ministryName={editing.ministryName ?? ministryName(editing.ministryId)}
-              categories={editCategoriesQ.data ?? []}
-              categoryLabel={categoryLabel}
+              folders={editFolderIndex}
+              foldersLoading={editCategoriesQ.isLoading}
               disabled={editM.isPending}
             />
             <PreviewFields preview={editPreview} setPreview={setEditPreview} pageCount={editing.pageCount} disabled={editM.isPending} />
@@ -1058,23 +1154,29 @@ export default function DocumentsPage() {
         {confirm && <p style={{ margin: 0, color: "var(--ink-700)" }}>{t(`documents.confirm.${confirm.kind}.body`)}</p>}
       </Modal>
 
-      {/* ---------------- Catégorie : création / modification ---------------- */}
+      {/* ---------------- Dossier : création / renommage (D-DOC-16) ---------------- */}
       <Modal
         open={catOpen}
         onClose={catSaveM.isPending ? undefined : () => setCatOpen(false)}
-        title={catEditing ? t("documents.categoryEditTitle") : t("documents.categoryCreateTitle")}
-        sub={catEditing ? ministryName(catEditing.ministryId) : t("documents.categoryCreateSub")}
+        title={catEditing ? t("documents.folders.editTitle") : catParent ? t("documents.folders.createSubTitle") : t("documents.folders.createTitle")}
+        sub={
+          catEditing
+            ? `${ministryName(catEditing.ministryId)} · ${folderIndex.byId.has(catEditing.id) ? folderPathLabel(folderIndex, catEditing.id, folderLabel) : folderLabel(catEditing)}`
+            : catParent
+              ? t("documents.folders.createSubIn", { path: folderIndex.byId.has(catParent.id) ? folderPathLabel(folderIndex, catParent.id, folderLabel) : folderLabel(catParent) })
+              : t("documents.folders.createSubRoot")
+        }
         footer={
           <>
             <Button variant="ghost" onClick={() => setCatOpen(false)} disabled={catSaveM.isPending}>{t("common.cancel")}</Button>
-            <Button variant="primary" disabled={!catCanSave} onClick={() => catSaveM.mutate({ editing: catEditing, form: catForm })}>
-              {catSaveM.isPending ? t("common.saving") : catEditing ? t("common.save") : t("documents.categoryCreateButton")}
+            <Button variant="primary" disabled={!catCanSave} onClick={() => catSaveM.mutate({ editing: catEditing, parent: catParent, form: catForm })}>
+              {catSaveM.isPending ? t("common.saving") : catEditing ? t("common.save") : t("documents.folders.createButton")}
             </Button>
           </>
         }
       >
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          {!catEditing && (
+          {!catEditing && !catParent && (
             <Field label={t("documents.ministryLabel")}>
               <Select value={catForm.ministryId} onChange={(e) => setCatForm({ ...catForm, ministryId: e.target.value })}>
                 <option value="">{t("common.choose")}</option>
@@ -1083,14 +1185,14 @@ export default function DocumentsPage() {
             </Field>
           )}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Field label={t("documents.categoryNameLabel")}>
-              <Input value={catForm.name} maxLength={DOCUMENT_LIMITS.categoryName} onChange={(e) => setCatForm({ ...catForm, name: e.target.value })} placeholder={t("documents.categoryNamePlaceholder")} />
+            <Field label={t("documents.folders.nameLabel")}>
+              <Input value={catForm.name} maxLength={DOCUMENT_LIMITS.categoryName} onChange={(e) => setCatForm({ ...catForm, name: e.target.value })} placeholder={t("documents.folders.namePlaceholder")} />
             </Field>
-            <Field label={t("documents.categoryNameEnLabel")} hint={t("documents.categoryNameEnHint")}>
-              <Input value={catForm.nameEn} maxLength={DOCUMENT_LIMITS.categoryName} onChange={(e) => setCatForm({ ...catForm, nameEn: e.target.value })} placeholder={t("documents.categoryNameEnPlaceholder")} />
+            <Field label={t("documents.folders.nameEnLabel")} hint={t("documents.folders.nameEnHint")}>
+              <Input value={catForm.nameEn} maxLength={DOCUMENT_LIMITS.categoryName} onChange={(e) => setCatForm({ ...catForm, nameEn: e.target.value })} placeholder={t("documents.folders.nameEnPlaceholder")} />
             </Field>
           </div>
-          <Field label={t("documents.categoryOrderLabel")} hint={catEditing ? undefined : t("documents.categoryOrderHint")}>
+          <Field label={t("documents.folders.orderLabel")} hint={catEditing ? t("documents.folders.orderEditHint") : t("documents.folders.orderHint")}>
             <Input
               type="number"
               min={0}
@@ -1105,23 +1207,58 @@ export default function DocumentsPage() {
         </div>
       </Modal>
 
-      {/* ---------------- Catégorie : suppression (utilisée → désactiver) ---------------- */}
+      {/* ---------------- Dossier : déplacement (D-DOC-16) ---------------- */}
+      <Modal
+        open={!!moving}
+        onClose={moveM.isPending ? undefined : () => setMoving(null)}
+        size="lg"
+        title={t("documents.folders.moveTitle")}
+        sub={moving ? (folderIndex.byId.has(moving.id) ? folderPathLabel(folderIndex, moving.id, folderLabel) : folderLabel(moving)) : undefined}
+        footer={moving && (
+          <>
+            <Button variant="ghost" onClick={() => setMoving(null)} disabled={moveM.isPending}>{t("common.cancel")}</Button>
+            <Button
+              variant="primary"
+              disabled={!moveChanged || moveM.isPending}
+              onClick={() => moveTarget !== undefined && moveM.mutate({ folder: moving, parentId: moveTarget })}
+            >
+              {moveM.isPending ? t("common.saving") : t("documents.folders.moveButton")}
+            </Button>
+          </>
+        )}
+      >
+        {moving && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <p style={{ margin: 0, color: "var(--ink-700)" }}>{t("documents.folders.moveExplain")}</p>
+            <FolderTreePicker
+              index={folderIndex}
+              value={moveTarget === undefined ? moving.parentId : moveTarget}
+              onChange={setMoveTarget}
+              noneLabel={t("documents.folders.moveRoot")}
+              disabled={moveM.isPending}
+              disabledReason={moveReason}
+            />
+          </div>
+        )}
+      </Modal>
+
+      {/* ---------------- Dossier : suppression (non vide → refus / désactiver) ---------------- */}
       <Modal
         open={!!catDeleting}
         onClose={catDeleteBusy ? undefined : closeCatDelete}
-        title={catDeleteBlocked ? t("documents.categoryDeleteBlockedTitle") : t("documents.categoryDeleteTitle")}
-        sub={catDeleting?.name}
+        title={catDeleteBlocked ? t("documents.folders.deleteBlockedTitle") : t("documents.folders.deleteTitle")}
+        sub={catDeleting ? folderLabel(catDeleting) : undefined}
         footer={
           catDeleteBlocked ? (
             <>
               <Button variant="ghost" onClick={closeCatDelete} disabled={catDeleteBusy}>{t("common.close")}</Button>
-              {catDeleting?.active && (
+              {catDeleteBlocked === "documents" && catDeleting?.active && (
                 <Button
                   variant="primary"
                   disabled={catToggleM.isPending}
                   onClick={() => catDeleting && catToggleM.mutate({ id: catDeleting.id, active: false }, { onSuccess: closeCatDelete })}
                 >
-                  {catToggleM.isPending ? t("common.loading") : t("documents.categoryDeactivateInstead")}
+                  {catToggleM.isPending ? t("common.loading") : t("documents.folders.deactivateInstead")}
                 </Button>
               )}
             </>
@@ -1129,21 +1266,23 @@ export default function DocumentsPage() {
             <>
               <Button variant="ghost" onClick={closeCatDelete} disabled={catDeleteBusy}>{t("common.cancel")}</Button>
               <Button variant="danger" disabled={catDeleteM.isPending} onClick={() => catDeleting && catDeleteM.mutate(catDeleting)}>
-                {catDeleteM.isPending ? t("common.loading") : t("documents.categoryConfirmDelete")}
+                {catDeleteM.isPending ? t("common.loading") : t("documents.folders.confirmDelete")}
               </Button>
             </>
           )
         }
       >
-        {catDeleteBlocked ? (
+        {catDeleteBlocked === "children" ? (
+          <p style={{ margin: 0, color: "var(--ink-700)" }}>{t(errKey("DOC_FOLDER_NOT_EMPTY"))}</p>
+        ) : catDeleteBlocked === "documents" ? (
           <>
             <p style={{ margin: "0 0 10px", color: "var(--ink-700)" }}>{t(errKey("DOC_CATEGORY_IN_USE"))}</p>
             <p style={{ margin: 0, color: "var(--ink-500)" }}>
-              {catDeleting?.active ? t("documents.categoryDeactivateExplain") : t("documents.categoryAlreadyInactive")}
+              {catDeleting?.active ? t("documents.folders.deactivateExplain") : t("documents.folders.alreadyInactive")}
             </p>
           </>
         ) : (
-          <p style={{ margin: 0, color: "var(--ink-500)" }}>{t("documents.categoryDeleteWarning")}</p>
+          <p style={{ margin: 0, color: "var(--ink-500)" }}>{t("documents.folders.deleteWarning")}</p>
         )}
       </Modal>
     </>
@@ -1159,14 +1298,14 @@ const sectionTitle = {
 };
 
 function MetaFields({
-  meta, setMeta, ministryId, ministryName, categories, categoryLabel, disabled,
+  meta, setMeta, ministryId, ministryName, folders, foldersLoading, disabled,
 }: {
   meta: MetaForm;
   setMeta: (f: (m: MetaForm) => MetaForm) => void;
   ministryId: string;
   ministryName: string;
-  categories: DocumentCategory[];
-  categoryLabel: (c: DocumentCategory) => string;
+  folders: FolderIndex;
+  foldersLoading?: boolean;
   disabled?: boolean;
 }) {
   const { t } = useTranslation();
@@ -1204,15 +1343,21 @@ function MetaFields({
           onChange={(scope) => { if (!disabled) setMeta((m) => ({ ...m, scope })); }}
         />
       </Field>
-      <Field label={t("documents.categoryLabel")} hint={ministryId && categories.length === 0 ? t("documents.categoryNoneHint") : undefined}>
-        <Select value={meta.categoryId} disabled={disabled || !ministryId} onChange={(e) => setMeta((m) => ({ ...m, categoryId: e.target.value }))}>
-          <option value="">{t("documents.noCategory")}</option>
-          {categories.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.active ? categoryLabel(c) : t("documents.categoryInactiveOption", { name: categoryLabel(c) })}
-            </option>
-          ))}
-        </Select>
+      {/* D-DOC-16 (JP 19/10) — le dossier se choisit dans l'arbre ; chemin complet affiché. Déplacer un document = changer ce champ. */}
+      <Field label={t("documents.folders.pickerLabel")} hint={ministryId && !foldersLoading && folders.roots.length === 0 ? t("documents.folders.pickerNoneHint") : undefined}>
+        {!ministryId ? (
+          <div style={{ color: "var(--ink-500)", fontSize: 13 }}>{t("documents.scopePickMinistryFirst")}</div>
+        ) : foldersLoading ? (
+          <div style={{ color: "var(--ink-500)", fontSize: 13 }}>{t("common.loading")}</div>
+        ) : (
+          <FolderTreePicker
+            index={folders}
+            value={meta.categoryId || null}
+            onChange={(id) => setMeta((m) => ({ ...m, categoryId: id ?? "" }))}
+            noneLabel={t("documents.folders.noFolder")}
+            disabled={disabled}
+          />
+        )}
       </Field>
     </>
   );

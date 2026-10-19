@@ -31,7 +31,15 @@ export const DOCUMENT_LIMITS = { title: 200, description: 1000, author: 120, cat
 
 // ---------------------------------------------------------------------------------------------
 // Catégories (RG-FOLDER-03) — catalogue par ministère, libellé = donnée (name, nameEn → repli name)
+// D-DOC-16 (JP 19/10) — les catégories deviennent des DOSSIERS hiérarchiques façon Drive : 3 niveaux
+// au plus, par ministère, créés et nommés par SUPER_ADMIN. Routes et types inchangés ; le GET rend
+// une liste PLATE (parents avant enfants), l'arbre se construit côté front (lib/documentFolders).
+// Un document est dans UN dossier (`categoryId`), à n'importe quel niveau.
 // ---------------------------------------------------------------------------------------------
+
+/** D-DOC-16 (JP 19/10) — profondeur maximale d'un dossier (1 = racine) ; au-delà, 422 DOC_FOLDER_TOO_DEEP. */
+export const DOCUMENT_FOLDER_MAX_DEPTH = 3;
+export type DocumentFolderDepth = 1 | 2 | 3;
 
 /** Mirrors com.excellence.back.documents.admin.dto.DocumentAdminDtos.DocumentCategoryResponse */
 export interface DocumentCategory {
@@ -45,6 +53,14 @@ export interface DocumentCategory {
   active: boolean;
   /** ≥ 1 document (même supprimé) la référence : DELETE → 422 DOC_CATEGORY_IN_USE, la désactiver. */
   inUse: boolean;
+  /** D-DOC-16 — dossier parent ; null = premier niveau du ministère. */
+  parentId: string | null;
+  /** D-DOC-16 — 1 (racine) à 3. */
+  depth: DocumentFolderDepth;
+  /** D-DOC-16 — documents rangés DIRECTEMENT dans ce dossier (hors sous-dossiers). */
+  documentCount: number;
+  /** D-DOC-16 — sous-dossiers directs ; > 0 → DELETE 422 DOC_FOLDER_NOT_EMPTY. */
+  childCount: number;
   createdAt: string;
   updatedAt: string | null;
 }
@@ -56,6 +72,8 @@ export interface DocumentCategoryCreateRequest {
   nameEn?: string;
   /** Absent = après les catégories existantes du ministère. */
   displayOrder?: number;
+  /** D-DOC-16 — absent / null = premier niveau ; sinon dossier du même ministère (422 DOC_FOLDER_TOO_DEEP au-delà de 3 niveaux). */
+  parentId?: string | null;
 }
 
 /**
@@ -68,6 +86,11 @@ export interface DocumentCategoryUpdateRequest {
   displayOrder?: number;
   /** false : disparaît de l'espace Documents de l'app ; les documents la gardent. */
   active?: boolean;
+  /**
+   * D-DOC-16 — présent = déplacement (`null` = vers la racine). 422 DOC_FOLDER_CYCLE (sous soi-même
+   * ou un descendant), DOC_FOLDER_TOO_DEEP (> 3 niveaux), DOC_CATEGORY_NAME_EXISTS (nom pris parmi les frères).
+   */
+  parentId?: string | null;
 }
 
 export function listDocumentCategories(ministryId?: string): Promise<DocumentCategory[]> {
@@ -75,7 +98,7 @@ export function listDocumentCategories(ministryId?: string): Promise<DocumentCat
   return apiFetch<DocumentCategory[]>(`/admin/document-categories${q}`);
 }
 
-/** 422 `DOC_CATEGORY_NAME_EXISTS` si le nom existe déjà (insensible à la casse) dans le ministère. */
+/** 422 `DOC_CATEGORY_NAME_EXISTS` si le nom existe déjà (insensible à la casse) parmi les dossiers frères (D-DOC-16). */
 export function createDocumentCategory(req: DocumentCategoryCreateRequest): Promise<DocumentCategory> {
   return apiFetch<DocumentCategory>("/admin/document-categories", { method: "POST", body: JSON.stringify(req) });
 }
@@ -84,7 +107,10 @@ export function updateDocumentCategory(id: string, patch: DocumentCategoryUpdate
   return apiFetch<DocumentCategory>(`/admin/document-categories/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
 }
 
-/** 422 `DOC_CATEGORY_IN_USE` si un document (même supprimé) la référence : la désactiver à la place. */
+/**
+ * 422 `DOC_CATEGORY_IN_USE` si un document (même supprimé) la référence : la désactiver à la place ;
+ * 422 `DOC_FOLDER_NOT_EMPTY` si elle a des sous-dossiers (D-DOC-16).
+ */
 export function deleteDocumentCategory(id: string): Promise<void> {
   return apiFetch<void>(`/admin/document-categories/${id}`, { method: "DELETE" });
 }
