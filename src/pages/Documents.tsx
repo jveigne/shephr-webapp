@@ -31,6 +31,7 @@ import {
   updateDocument,
   updateDocumentCategory,
   type AdminDocument,
+  type AdminDocumentCreateRequest,
   type AdminDocumentUpdateRequest,
   type DocumentCategory,
   type DocumentCategoryUpdateRequest,
@@ -80,6 +81,30 @@ interface PreviewForm {
   /** `datetime-local` (heure locale du navigateur) ; vide = n'expire pas (RG-DOC-05). */
   expiresAt: string;
 }
+
+/**
+ * Dépôt multiple (JP 20/10) — un PDF choisi dans la modale de création. Le contrat n'a pas de route
+ * de dépôt groupé : chaque fichier part en `POST /admin/documents` (un à la fois, le backend lit
+ * chaque PDF) avec le même rangement ; seul le titre est propre à chaque fichier.
+ */
+interface UploadItem {
+  /** nom + taille + date : écarte un même fichier choisi deux fois. */
+  key: string;
+  file: File;
+  title: string;
+  /** Contrôle local échoué (checkPdf) : le fichier est ignoré au dépôt. */
+  error: string | null;
+  state: "pending" | "uploading" | "done" | "failed";
+  /** Document créé (brouillon, ou publié si demandé). */
+  doc?: AdminDocument;
+  /** Échec du dépôt, ou de la publication d'un document pourtant créé. */
+  failMsg?: string;
+}
+
+/** Plafond d'un dépôt multiple : au-delà, les fichiers en trop sont écartés. */
+const UPLOAD_BATCH_MAX = 20;
+const fileKey = (f: File) => `${f.name}:${f.size}:${f.lastModified}`;
+const titleOfFile = (f: File) => f.name.replace(/\.pdf$/i, "").slice(0, DOCUMENT_LIMITS.title);
 
 const emptyMeta = (): MetaForm => ({
   title: "", description: "", author: "", language: "", scope: { level: "MINISTRY", id: null }, categoryId: "",
@@ -139,6 +164,21 @@ function updateRequestOf(meta: MetaForm, preview: PreviewForm, pageCount: number
     freePages: parseFreePages(preview.freePages, pageCount) ?? 1,
     open: preview.open,
     expiresAt: fromLocalInput(preview.expiresAt),
+  };
+}
+
+/** Partie `data` du multipart de création ; `freePages` absent : le backend prend min(5, pageCount) (RG-DOC-01c). */
+function createRequestOf(ministryId: string, meta: MetaForm, title: string): AdminDocumentCreateRequest {
+  const scope = meta.scope ?? { level: "MINISTRY" as DocumentScopeLevel, id: null };
+  return {
+    ministryId,
+    title: title.trim(),
+    description: opt(meta.description),
+    author: opt(meta.author),
+    language: meta.language || undefined,
+    scopeLevel: scope.level,
+    scopeId: scope.level === "MINISTRY" ? undefined : scope.id ?? undefined,
+    categoryId: meta.categoryId || undefined,
   };
 }
 
@@ -278,12 +318,14 @@ export default function DocumentsPage() {
   };
 
   // ---- Création (3 temps : dépôt + rangement → aperçu → lien) ----
-  type CreateStep = "upload" | "preview" | "published";
+  // Dépôt multiple : « batch » remplace « aperçu » et « lien » (réglages par document, ensuite, dans la liste).
+  type CreateStep = "upload" | "preview" | "published" | "batch";
   const [createOpen, setCreateOpen] = useState(false);
   const [createStep, setCreateStep] = useState<CreateStep>("upload");
   const [createMinistry, setCreateMinistry] = useState("");
-  const [createFile, setCreateFile] = useState<File | null>(null);
-  const [fileError, setFileError] = useState<string | null>(null);
+  const [items, setItems] = useState<UploadItem[]>([]);
+  /** Dépôt multiple : publier chaque document dès sa création (sinon brouillons). */
+  const [batchPublish, setBatchPublish] = useState(false);
   const [meta, setMeta] = useState<MetaForm>(emptyMeta);
   const [preview, setPreview] = useState<PreviewForm>({ freePages: "", open: false, expiresAt: "" });
   const [created, setCreated] = useState<AdminDocument | null>(null);
@@ -297,8 +339,8 @@ export default function DocumentsPage() {
   const openCreate = () => {
     setCreateStep("upload");
     setCreateMinistry(ministryId);
-    setCreateFile(null);
-    setFileError(null);
+    setItems([]);
+    setBatchPublish(false);
     // D-DOC-16 (JP 19/10) — déposer depuis un dossier sélectionné le range dans ce dossier.
     setMeta({ ...emptyMeta(), categoryId: selectedNode ? selectedNode.folder.id : "" });
     setPreview({ freePages: "", open: false, expiresAt: "" });
@@ -317,21 +359,52 @@ export default function DocumentsPage() {
     onOk(file);
   };
 
+  const isBatch = items.length > 1;
+  const validItems = items.filter((it) => !it.error);
+
+  /**
+   * Ajoute des fichiers à la sélection (le champ peut être réutilisé pour en ajouter d'autres).
+   * Le titre du dépôt simple vit dans `meta.title` ; il est recopié dans l'élément au passage à
+   * plusieurs fichiers, et inversement quand il n'en reste qu'un.
+   */
+  const syncItems = (next: UploadItem[]) => {
+    if (items.length === 1 && next.length > 1 && meta.title.trim()) {
+      next = next.map((it) => (it.key === items[0].key ? { ...it, title: meta.title } : it));
+    }
+    // Premier fichier : titre proposé seulement s'il n'a pas encore été saisi (comme avant).
+    if (next.length === 1 && (items.length > 1 || (items.length === 0 && !meta.title.trim()))) {
+      const title = next[0].title;
+      setMeta((m) => ({ ...m, title }));
+    }
+    setItems(next);
+  };
+
+  const addFiles = async (files: File[]) => {
+    const known = new Set(items.map((it) => it.key));
+    const fresh = files.filter((f) => {
+      const k = fileKey(f);
+      if (known.has(k)) return false;
+      known.add(k);
+      return true;
+    });
+    const checked = await Promise.all(fresh.map(async (file): Promise<UploadItem> => {
+      const code = await checkPdf(file);
+      return { key: fileKey(file), file, title: titleOfFile(file), error: code ? t(errKey(code)) : null, state: "pending" };
+    }));
+    const next = [...items, ...checked];
+    if (next.length > UPLOAD_BATCH_MAX) {
+      push({ kind: "error", title: t("documents.batch.tooManyTitle"), msg: t("documents.batch.tooManyMsg", { max: UPLOAD_BATCH_MAX }) });
+    }
+    syncItems(next.slice(0, UPLOAD_BATCH_MAX));
+  };
+
+  const removeItem = (key: string) => syncItems(items.filter((it) => it.key !== key));
+  const patchItem = (key: string, p: Partial<UploadItem>) =>
+    setItems((cur) => cur.map((it) => (it.key === key ? { ...it, ...p } : it)));
+
   const uploadM = useMutation({
-    mutationFn: (v: { file: File; ministryId: string; meta: MetaForm }) => {
-      const scope = v.meta.scope!;
-      return createDocument(v.file, {
-        ministryId: v.ministryId,
-        title: v.meta.title.trim(),
-        description: opt(v.meta.description),
-        author: opt(v.meta.author),
-        language: v.meta.language || undefined,
-        scopeLevel: scope.level,
-        scopeId: scope.level === "MINISTRY" ? undefined : scope.id ?? undefined,
-        categoryId: v.meta.categoryId || undefined,
-        // freePages absent : le backend prend min(5, pageCount) (RG-DOC-01c) ; on l'ajuste à l'étape suivante.
-      });
-    },
+    mutationFn: (v: { file: File; ministryId: string; meta: MetaForm }) =>
+      createDocument(v.file, createRequestOf(v.ministryId, v.meta, v.meta.title)),
     onSuccess: (d) => {
       invalidateDocs();
       setCreated(d);
@@ -364,7 +437,50 @@ export default function DocumentsPage() {
     },
   });
 
-  const createBusy = uploadM.isPending || finishM.isPending;
+  /**
+   * Dépôt multiple : un `POST /admin/documents` par fichier, l'un après l'autre (le backend lit et
+   * découpe chaque PDF) ; un échec n'arrête pas les suivants. Sert aussi à « Réessayer les échecs ».
+   */
+  const batchM = useMutation({
+    mutationFn: async (v: { ministryId: string; meta: MetaForm; publish: boolean; todo: UploadItem[] }) => {
+      let ok = 0;
+      let failed = 0;
+      for (const it of v.todo) {
+        patchItem(it.key, { state: "uploading", failMsg: undefined });
+        let doc: AdminDocument;
+        try {
+          doc = await createDocument(it.file, createRequestOf(v.ministryId, v.meta, it.title));
+        } catch (e) {
+          failed++;
+          patchItem(it.key, { state: "failed", failMsg: errText(e) });
+          continue;
+        }
+        ok++;
+        patchItem(it.key, { state: "done", doc });
+        if (v.publish) {
+          try {
+            patchItem(it.key, { doc: await publishDocument(doc.id) });
+          } catch (e) {
+            // Créé mais resté en brouillon : on le signale sans le compter en échec (pas de nouveau dépôt).
+            patchItem(it.key, { failMsg: t("documents.batch.publishFailed", { error: errText(e) }) });
+          }
+        }
+      }
+      return { ok, failed };
+    },
+    onMutate: () => setCreateStep("batch"),
+    onSettled: () => invalidateDocs(),
+    onSuccess: ({ ok, failed }) =>
+      push(failed
+        ? { kind: "error", title: t("documents.batch.doneWithErrorsToast"), msg: t("documents.batch.summary", { ok, failed }) }
+        : { kind: "ok", title: t("documents.batch.doneToast", { count: ok }), msg: t("documents.batch.summary", { ok, failed }) }),
+  });
+
+  const startBatch = (todo: UploadItem[]) =>
+    // Pas de description commune en dépôt multiple (champ masqué) : celle saisie avant est écartée.
+    batchM.mutate({ ministryId: createMinistry, meta: { ...meta, description: "" }, publish: batchPublish, todo });
+
+  const createBusy = uploadM.isPending || finishM.isPending || batchM.isPending;
   const closeCreate = () => { if (!createBusy) setCreateOpen(false); };
 
   // ---- Modification des métadonnées (PATCH complet) ----
@@ -965,23 +1081,51 @@ export default function DocumentsPage() {
         open={createOpen}
         onClose={createBusy ? undefined : closeCreate}
         size="lg"
-        title={createStep === "published" ? t("documents.publishedTitle") : t("documents.createTitle")}
+        title={createStep === "published" ? t("documents.publishedTitle") : isBatch ? t("documents.batch.createTitle") : t("documents.createTitle")}
         sub={
-          createStep === "upload" ? t("documents.createStep1")
+          createStep === "batch" ? t("documents.batch.resultSub", { count: items.filter((it) => it.state !== "pending").length })
+            : createStep === "upload" && isBatch ? t("documents.batch.createSub")
+            : createStep === "upload" ? t("documents.createStep1")
             : createStep === "preview" ? t("documents.createStep2", { pages: created?.pageCount ?? 0 })
             : created?.title
         }
         footer={
-          createStep === "upload" ? (
+          createStep === "upload" && isBatch ? (
             <>
               <Button variant="ghost" onClick={closeCreate} disabled={createBusy}>{t("common.cancel")}</Button>
               <Button
                 variant="primary"
                 iconL={<Icons.Upload size={14} />}
-                disabled={!createMinistry || !createFile || !!fileError || !metaValid(meta) || createBusy}
-                onClick={() => createFile && uploadM.mutate({ file: createFile, ministryId: createMinistry, meta })}
+                disabled={
+                  !createMinistry || validItems.length === 0 || validItems.some((it) => !it.title.trim())
+                  || !metaValid({ ...meta, title: "-" }) || createBusy
+                }
+                onClick={() => startBatch(validItems)}
+              >
+                {t("documents.batch.uploadButton", { count: validItems.length })}
+              </Button>
+            </>
+          ) : createStep === "upload" ? (
+            <>
+              <Button variant="ghost" onClick={closeCreate} disabled={createBusy}>{t("common.cancel")}</Button>
+              <Button
+                variant="primary"
+                iconL={<Icons.Upload size={14} />}
+                disabled={!createMinistry || validItems.length !== 1 || !metaValid(meta) || createBusy}
+                onClick={() => validItems[0] && uploadM.mutate({ file: validItems[0].file, ministryId: createMinistry, meta })}
               >
                 {uploadM.isPending ? t("documents.uploading") : t("documents.uploadButton")}
+              </Button>
+            </>
+          ) : createStep === "batch" ? (
+            <>
+              {!batchM.isPending && items.some((it) => it.state === "failed") && (
+                <Button variant="ghost" iconL={<Icons.Upload size={14} />} onClick={() => startBatch(items.filter((it) => it.state === "failed"))}>
+                  {t("documents.batch.retryFailed")}
+                </Button>
+              )}
+              <Button variant="primary" disabled={batchM.isPending} onClick={() => setCreateOpen(false)}>
+                {batchM.isPending ? t("documents.uploading") : t("common.done")}
               </Button>
             </>
           ) : createStep === "preview" && created ? (
@@ -1018,25 +1162,30 @@ export default function DocumentsPage() {
                 {ministries.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
               </Select>
             </Field>
-            <Field label={t("documents.fileLabel")} hint={t("documents.fileHint")}>
+            <Field label={t("documents.batch.filesLabel")} hint={t("documents.batch.filesHint", { max: UPLOAD_BATCH_MAX })}>
               <input
                 type="file"
                 accept="application/pdf,.pdf"
+                multiple
                 className="input"
                 disabled={createBusy}
                 onChange={(e) => {
-                  const f = e.target.files?.[0] ?? null;
-                  setCreateFile(null);
-                  void pickFile(f, (ok) => {
-                    setCreateFile(ok);
-                    // Titre proposé à partir du nom du fichier, s'il n'a pas encore été saisi.
-                    setMeta((m) => (m.title.trim() ? m : { ...m, title: ok.name.replace(/\.pdf$/i, "").slice(0, DOCUMENT_LIMITS.title) }));
-                  }, setFileError);
+                  const files = Array.from(e.target.files ?? []);
+                  // Vidé pour pouvoir rouvrir le sélecteur et ajouter d'autres fichiers.
+                  e.target.value = "";
+                  if (files.length) void addFiles(files);
                 }}
               />
-              {fileError && <span style={errorStyle}>{fileError}</span>}
+              {items.length === 1 && items[0].error && <span style={errorStyle}>{items[0].error}</span>}
             </Field>
+            {items.length === 1 && items[0].error && (
+              <div><Button variant="ghost" onClick={() => removeItem(items[0].key)}>{t("documents.batch.remove")}</Button></div>
+            )}
+            {isBatch && (
+              <UploadList items={items} disabled={createBusy} onTitle={(key, title) => patchItem(key, { title })} onRemove={removeItem} />
+            )}
             <MetaFields
+              batch={isBatch}
               meta={meta}
               setMeta={setMeta}
               ministryId={createMinistry}
@@ -1046,6 +1195,20 @@ export default function DocumentsPage() {
               disabled={createBusy}
             />
           </div>
+        )}
+
+        {createStep === "upload" && isBatch && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 14 }}>
+            <Checkbox checked={batchPublish} onChange={(v) => !createBusy && setBatchPublish(v)} />
+            <span style={{ cursor: "pointer" }} onClick={() => !createBusy && setBatchPublish((p) => !p)}>{t("documents.batch.publishNow")}</span>
+          </div>
+        )}
+        {createStep === "upload" && isBatch && (
+          <p style={{ margin: "6px 0 0", color: "var(--ink-500)", fontSize: 13 }}>{t("documents.batch.previewLaterHint")}</p>
+        )}
+
+        {createStep === "batch" && (
+          <UploadList items={items} disabled result onCopy={copy} />
         )}
 
         {createStep === "preview" && created && (
@@ -1298,8 +1461,10 @@ const sectionTitle = {
 };
 
 function MetaFields({
-  meta, setMeta, ministryId, ministryName, folders, foldersLoading, disabled,
+  meta, setMeta, ministryId, ministryName, folders, foldersLoading, disabled, batch,
 }: {
+  /** Dépôt multiple : titre propre à chaque fichier (liste au-dessus), pas de description commune. */
+  batch?: boolean;
   meta: MetaForm;
   setMeta: (f: (m: MetaForm) => MetaForm) => void;
   ministryId: string;
@@ -1311,19 +1476,23 @@ function MetaFields({
   const { t } = useTranslation();
   return (
     <>
-      <Field label={t("documents.titleLabel")}>
-        <Input value={meta.title} maxLength={DOCUMENT_LIMITS.title} disabled={disabled} onChange={(e) => setMeta((m) => ({ ...m, title: e.target.value }))} />
-      </Field>
-      <Field label={t("documents.descriptionLabel")} hint={t("documents.descriptionHint")}>
-        <textarea
-          className="input"
-          rows={3}
-          maxLength={DOCUMENT_LIMITS.description}
-          disabled={disabled}
-          value={meta.description}
-          onChange={(e) => setMeta((m) => ({ ...m, description: e.target.value }))}
-        />
-      </Field>
+      {!batch && (
+        <>
+          <Field label={t("documents.titleLabel")}>
+            <Input value={meta.title} maxLength={DOCUMENT_LIMITS.title} disabled={disabled} onChange={(e) => setMeta((m) => ({ ...m, title: e.target.value }))} />
+          </Field>
+          <Field label={t("documents.descriptionLabel")} hint={t("documents.descriptionHint")}>
+            <textarea
+              className="input"
+              rows={3}
+              maxLength={DOCUMENT_LIMITS.description}
+              disabled={disabled}
+              value={meta.description}
+              onChange={(e) => setMeta((m) => ({ ...m, description: e.target.value }))}
+            />
+          </Field>
+        </>
+      )}
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
         <Field label={t("documents.authorLabel")}>
           <Input value={meta.author} maxLength={DOCUMENT_LIMITS.author} disabled={disabled} onChange={(e) => setMeta((m) => ({ ...m, author: e.target.value }))} />
@@ -1414,6 +1583,68 @@ function PreviewFields({
           </span>
         </div>
       </Field>
+    </div>
+  );
+}
+
+/** Dépôt multiple : fichiers choisis (titre modifiable) puis, après envoi, résultat par fichier. */
+function UploadList({
+  items, disabled, result, onTitle, onRemove, onCopy,
+}: {
+  items: UploadItem[];
+  disabled?: boolean;
+  /** Après envoi : statut et lien à la place du titre éditable. */
+  result?: boolean;
+  onTitle?: (key: string, title: string) => void;
+  onRemove?: (key: string) => void;
+  onCopy?: (url: string) => void;
+}) {
+  const { t } = useTranslation();
+  const shown = result ? items.filter((it) => it.state !== "pending") : items;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", border: "1px solid var(--line-soft)", borderRadius: "var(--radius-sm)" }}>
+      {shown.map((it, i) => (
+        <div
+          key={it.key}
+          style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "8px 10px", borderTop: i ? "1px solid var(--line-soft)" : undefined }}
+        >
+          <span style={{ color: it.error || it.state === "failed" ? "var(--err)" : "var(--ink-500)", paddingTop: 8 }}><Icons.Document size={16} /></span>
+          <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
+            {result || it.error ? (
+              <div style={{ paddingTop: 6, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.title || it.file.name}</div>
+            ) : (
+              <Input
+                value={it.title}
+                maxLength={DOCUMENT_LIMITS.title}
+                disabled={disabled}
+                aria-label={t("documents.titleLabel")}
+                aria-invalid={!it.title.trim()}
+                style={!it.title.trim() ? { borderColor: "var(--err)" } : undefined}
+                onChange={(e) => onTitle?.(it.key, e.target.value)}
+              />
+            )}
+            <span style={{ color: "var(--ink-500)", fontSize: 12 }}>
+              {it.file.name} · {t("documents.batch.size", { size: (it.file.size / 1_048_576).toFixed(1) })}
+              {it.doc && ` · ${t("documents.pagesCount", { count: it.doc.pageCount })}`}
+            </span>
+            {it.error && <span style={errorStyle}>{t("documents.batch.ignored", { error: it.error })}</span>}
+            {it.failMsg && <span style={errorStyle}>{it.failMsg}</span>}
+            {result && it.doc?.shareUrl && onCopy && (
+              <div style={{ marginTop: 2 }}><ShareLink url={it.doc.shareUrl} onCopy={onCopy} copyLabel={t("common.copy")} /></div>
+            )}
+          </div>
+          <div style={{ paddingTop: 4 }}>
+            {result ? (
+              it.state === "uploading" ? <Badge tone="gray">{t("documents.uploading")}</Badge>
+                : it.state === "failed" ? <Badge tone="err" dot>{t("documents.batch.failed")}</Badge>
+                : it.doc?.status === "PUBLISHED" ? <Badge tone="ok" dot>{t("documents.status.PUBLISHED")}</Badge>
+                : <Badge tone="gray" dot>{t("documents.status.DRAFT")}</Badge>
+            ) : (
+              <IconButton icon={<Icons.X size={14} />} title={t("documents.batch.remove")} disabled={disabled} onClick={() => onRemove?.(it.key)} />
+            )}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

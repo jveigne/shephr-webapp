@@ -387,7 +387,7 @@
   "documents": {
     "title": "Documents",
     "intro": "PDF <strong>partagés par un lien universel</strong> : le destinataire lit un aperçu (les premières pages) dans son navigateur, la suite dans l'app Shephr. Un document est rangé à <strong>un</strong> niveau du ministère (tout le ministère, une nation, une région, une ville ou une assemblée) et dans un dossier (trois niveaux au plus). Il n'est accessible par lien qu'une fois publié, et seulement si son ministère a le module Documents.",
-    "newDocument": "Déposer un PDF",
+    "newDocument": "Déposer des PDF",
     "filterMinistry": "Ministère :",
     "filterNeedsMinistry": "Choisissez d'abord un ministère",
     "allMinistries": "Tous les ministères",
@@ -605,6 +605,30 @@
       "DOC_FOLDER_TOO_DEEP": "Trois niveaux de dossiers au maximum : impossible de le ranger ici.",
       "DOC_FOLDER_CYCLE": "Un dossier ne peut pas être rangé dans lui-même ni dans l'un de ses sous-dossiers.",
       "DOC_FOLDER_NOT_EMPTY": "Ce dossier contient des sous-dossiers : supprimez-les ou déplacez-les d'abord."
+    },
+    "batch": {
+      "createTitle": "Déposer des documents",
+      "createSub": "Plusieurs PDF : un titre par fichier, le même ministère, la même portée et le même dossier pour tous.",
+      "filesLabel": "Fichiers PDF",
+      "filesHint": "Un ou plusieurs PDF ({{max}} au plus par dépôt), 50 Mo au maximum chacun, non protégés par mot de passe. Rouvrez le sélecteur pour en ajouter.",
+      "size": "{{size}} Mo",
+      "remove": "Retirer",
+      "ignored": "Ignoré : {{error}}",
+      "publishNow": "Publier chaque document dès son dépôt",
+      "previewLaterHint": "L'aperçu offert (5 premières pages par défaut), l'accès libre et l'expiration se règlent ensuite document par document.",
+      "uploadButton_one": "Déposer {{count}} PDF",
+      "uploadButton_other": "Déposer les {{count}} PDF",
+      "resultSub_one": "{{count}} fichier traité",
+      "resultSub_other": "{{count}} fichiers traités",
+      "retryFailed": "Réessayer les échecs",
+      "failed": "Échec",
+      "publishFailed": "Déposé mais resté en brouillon : {{error}}",
+      "doneToast_one": "{{count}} document déposé",
+      "doneToast_other": "{{count}} documents déposés",
+      "doneWithErrorsToast": "Dépôt terminé avec des erreurs",
+      "summary": "{{ok}} réussi(s), {{failed}} échec(s)",
+      "tooManyTitle": "Trop de fichiers",
+      "tooManyMsg": "{{max}} PDF au plus par dépôt : les fichiers en trop ont été écartés."
     }
   },
   "audit": {

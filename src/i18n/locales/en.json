@@ -387,7 +387,7 @@
   "documents": {
     "title": "Documents",
     "intro": "PDFs <strong>shared through a universal link</strong>: recipients read a preview (the first pages) in their browser and the rest in the Shephr app. A document is filed at <strong>one</strong> level of the ministry (whole ministry, a nation, a region, a city or an assembly) and in a folder (three levels at most). It is reachable by link only once published, and only if its ministry has the Documents module.",
-    "newDocument": "Upload a PDF",
+    "newDocument": "Upload PDFs",
     "filterMinistry": "Ministry:",
     "filterNeedsMinistry": "Pick a ministry first",
     "allMinistries": "All ministries",
@@ -605,6 +605,30 @@
       "DOC_FOLDER_TOO_DEEP": "Three folder levels at most: it cannot be filed here.",
       "DOC_FOLDER_CYCLE": "A folder cannot be filed inside itself or one of its subfolders.",
       "DOC_FOLDER_NOT_EMPTY": "This folder contains subfolders: delete or move them first."
+    },
+    "batch": {
+      "createTitle": "Upload documents",
+      "createSub": "Several PDFs: one title per file, the same ministry, scope and folder for all.",
+      "filesLabel": "PDF files",
+      "filesHint": "One or more PDFs ({{max}} at most per upload), 50 MB at most each, not password-protected. Reopen the picker to add more.",
+      "size": "{{size}} MB",
+      "remove": "Remove",
+      "ignored": "Skipped: {{error}}",
+      "publishNow": "Publish each document as soon as it is uploaded",
+      "previewLaterHint": "The free preview (first 5 pages by default), open access and expiry are then set document by document.",
+      "uploadButton_one": "Upload {{count}} PDF",
+      "uploadButton_other": "Upload the {{count}} PDFs",
+      "resultSub_one": "{{count}} file processed",
+      "resultSub_other": "{{count}} files processed",
+      "retryFailed": "Retry failed uploads",
+      "failed": "Failed",
+      "publishFailed": "Uploaded but left as a draft: {{error}}",
+      "doneToast_one": "{{count}} document uploaded",
+      "doneToast_other": "{{count}} documents uploaded",
+      "doneWithErrorsToast": "Upload finished with errors",
+      "summary": "{{ok}} succeeded, {{failed}} failed",
+      "tooManyTitle": "Too many files",
+      "tooManyMsg": "{{max}} PDFs at most per upload: the extra files were left out."
     }
   },
   "audit": {
