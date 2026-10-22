@@ -16,7 +16,7 @@ import {
   deleteCountry, deleteLocality, deleteUnit, deleteZone,
   fetchMinistryStructure, listContinents, listNationNodes,
   updateCountry, updateLocality, updateNodeRegionLabel, updateUnit, updateZone,
-  type RegionLabel,
+  LANGUAGES, type Language, type RegionLabel,
 } from "@/services/orgService";
 
 /** Compteurs absents (chargement) : constante partagée, pour ne pas re-rendre l'arbre à vide. */
@@ -41,9 +41,11 @@ interface FormValues {
   country: string;
   /** Libellé du niveau 2 de la nation : « Région » ou « État » (Chantier B). */
   regionLabel: RegionLabel;
+  /** D-ETU-24 (JP 21/10) — langue d'une assemblée (UNIT seulement), défaut `FR`. */
+  language: Language;
 }
 const EMPTY_VALUES: FormValues = {
-  continentId: "", code: "", name: "", nameEn: "", defaultCurrency: "", description: "", country: "", regionLabel: "REGION",
+  continentId: "", code: "", name: "", nameEn: "", defaultCurrency: "", description: "", country: "", regionLabel: "REGION", language: "FR",
 };
 
 export default function StructurePage() {
@@ -137,6 +139,7 @@ export default function StructurePage() {
       description: d.description ?? "",
       country: d.country ?? "",
       regionLabel: regionLabelByCountry.get(node.id) ?? "REGION",
+      language: d.language ?? "FR",
     });
     setEditing({ mode: "edit", level: node.level, node });
   };
@@ -160,7 +163,7 @@ export default function StructurePage() {
             // Chantier B : la Ville s'insère directement sous la Région (teams dissoutes).
             return createLocality({ ministryId, zoneId: parent.id, name: v.name.trim(), country: v.country.trim() || undefined });
           case "UNIT":
-            return createUnit({ ministryId, localityId: parent.id, name: v.name.trim() });
+            return createUnit({ ministryId, localityId: parent.id, name: v.name.trim(), language: v.language });
         }
       } else {
         const id = editing.node.id;
@@ -175,7 +178,7 @@ export default function StructurePage() {
           case "LOCALITY":
             return updateLocality(id, { name: v.name.trim(), country: v.country.trim() });
           case "UNIT":
-            return updateUnit(id, { name: v.name.trim() });
+            return updateUnit(id, { name: v.name.trim(), language: v.language });
         }
       }
     },
@@ -329,9 +332,17 @@ export default function StructurePage() {
             )}
 
             {editing.level === "UNIT" && (
-              <Field label={t("structure.name")}>
-                <Input value={values.name} onChange={(e) => setValues({ ...values, name: e.target.value })} />
-              </Field>
+              <>
+                <Field label={t("structure.name")}>
+                  <Input value={values.name} onChange={(e) => setValues({ ...values, name: e.target.value })} />
+                </Field>
+                {/* D-ETU-24 (JP 21/10) — langue de l'assemblée, mêmes droits que le reste de la fiche. */}
+                <Field label={t("structure.languageLabel")} hint={t("structure.languageHint")}>
+                  <Select value={values.language} onChange={(e) => setValues({ ...values, language: e.target.value as Language })}>
+                    {LANGUAGES.map((l) => <option key={l} value={l}>{t(`structure.language.${l}`)}</option>)}
+                  </Select>
+                </Field>
+              </>
             )}
           </div>
         )}
@@ -401,6 +412,10 @@ function StructureRow({
           {t(`subscriptions.level.${node.level}`)}
         </span>
         <span style={{ fontWeight: isMinistry ? 600 : 500 }}>{node.name}</span>
+        {/* D-ETU-24 (JP 21/10) — langue de l'assemblée (absente d'un ancien backend : rien d'affiché). */}
+        {node.level === "UNIT" && node.data?.language && (
+          <Badge tone="gray">{node.data.language}</Badge>
+        )}
         {node.level === "LOCALITY" && node.children.length > 1 && (
           <Badge tone="earth">{t("structure.assemblyCount", { count: node.children.length })}</Badge>
         )}

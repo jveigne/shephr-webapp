@@ -1,6 +1,11 @@
 import { apiFetch } from "./api";
 import type { OrgData } from "@/lib/orgTree";
 
+// Mirrors com.excellence.back.auth.Language — D-ETU-24 / D-ETU-25 (JP 21/10) : langue d'une
+// assemblée et d'une unité d'étude (contrat Étude §11.5 ; partagé avec teachingModuleService).
+export type Language = "FR" | "EN";
+export const LANGUAGES: readonly Language[] = ["FR", "EN"];
+
 // ---- Continents (référentiel global) ----
 export interface ContinentResponse {
   id: string;
@@ -44,6 +49,8 @@ export interface UnitRow {
   name: string;
   type: "ASSEMBLY";
   active: boolean;
+  /** D-ETU-24 (JP 21/10) — langue de l'assemblée (défaut `FR`) : oriente son catalogue d'étude (D-ETU-26). */
+  language: Language;
 }
 
 // ---- Lectures ----
@@ -108,6 +115,8 @@ export function createLocality(body: {
 }
 export function createUnit(body: {
   ministryId: string; localityId: string; name: string;
+  /** D-ETU-24 (JP 21/10) — facultatif, défaut `FR` côté backend. */
+  language?: Language;
 }): Promise<UnitRow> {
   // Chantier B (décision #5) : plus de type CENTER — toute unité est une assemblée de maison.
   return apiFetch<UnitRow>("/api/org/admin/units", { method: "POST", body: JSON.stringify({ ...body, type: "ASSEMBLY" }) });
@@ -125,7 +134,8 @@ export function updateZone(id: string, body: Partial<{ name: string; description
 export function updateLocality(id: string, body: Partial<{ name: string; country: string; zoneId: string }>): Promise<LocalityRow> {
   return apiFetch<LocalityRow>(`/api/org/admin/localities/${id}`, { method: "PATCH", body: JSON.stringify(body) });
 }
-export function updateUnit(id: string, body: Partial<{ localityId: string; name: string; active: boolean }>): Promise<UnitRow> {
+// D-ETU-24 (JP 21/10) — `language` absent = inchangé.
+export function updateUnit(id: string, body: Partial<{ localityId: string; name: string; active: boolean; language: Language }>): Promise<UnitRow> {
   return apiFetch<UnitRow>(`/api/org/admin/units/${id}`, { method: "PATCH", body: JSON.stringify(body) });
 }
 
