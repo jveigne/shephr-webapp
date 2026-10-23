@@ -349,7 +349,12 @@
       "importing": "Import…",
       "doneToast": "Module importé (désactivé)",
       "languageLabel": "Langue de l'unité",
-      "languageFromFile": "Langue lue dans le fichier ({{lang}})."
+      "languageFromFile": "Langue lue dans le fichier ({{lang}}).",
+      "moduleNotes": "Recommandations de l'unité",
+      "lessonNotesCount_one": "{{count}} leçon avec recommandations",
+      "lessonNotesCount_other": "{{count}} leçons avec recommandations",
+      "actionCount_one": "{{count}} action des membres",
+      "actionCount_other": "{{count}} actions des membres"
     },
     "questions": {
       "lesson": "Leçon {{number}}",
@@ -438,7 +443,20 @@
       "FR": "Français",
       "EN": "English"
     },
-    "colLanguage": "Langue"
+    "colLanguage": "Langue",
+    "leaderNotesLabel": "Recommandations au dirigeant",
+    "leaderNotesPlaceholder": "Texte brut, retours à la ligne conservés",
+    "moduleLeaderNotesHint": "Montrées au seul dirigeant de l'assemblée avant la première leçon de l'unité.",
+    "lessonLeaderNotesHint": "Montrées au seul dirigeant de l'assemblée avant de commencer la leçon.",
+    "memberActionsLabel": "Actions des membres",
+    "memberActionsPlaceholder": "Une action par ligne",
+    "memberActionsHint": "Une action par ligne ({{max}} au plus) — montrées à tous une fois la séance terminée.",
+    "notesButton_one": "Notes ({{count}})",
+    "notesButton_other": "Notes ({{count}})",
+    "notesToggleTitle": "Recommandations au dirigeant et actions des membres",
+    "errLeaderNotesTooLong": "Recommandations trop longues (10 000 caractères au plus).",
+    "errTooManyActions": "30 actions des membres au plus par leçon.",
+    "errActionTooLong": "Une action des membres dépasse 2 000 caractères."
   },
   "eventTypes": {
     "title": "Types d'évènement",

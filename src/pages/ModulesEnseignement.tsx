@@ -34,6 +34,8 @@ import {
 // D-ETU-15 (JP 21/10) — Étude de l'assemblée gérée dans cette même page (pas de page à part) : un
 // module devient une « unité » (code, prérequis D-ETU-19), un chapitre une « leçon » (portion,
 // questions — D-ETU-01 / D-ETU-02) ; import JSON (D-ETU-16) d'un module né inactif (D-ETU-17).
+// D-ETU-33 (JP 23/10) — recommandations au dirigeant (unité et leçon) et actions des membres
+// (leçon, une action par ligne ↔ liste) : saisies ici ou importées telles quelles du fichier.
 
 /** Une ligne de chapitre en cours d'édition (numéro saisi en texte pour laisser l'input libre). */
 interface ChapterRow {
@@ -49,7 +51,19 @@ interface ChapterRow {
   /** RG-ETU-23 — déjà étudié en séance : même verrou que `read`. */
   studied: boolean;
   questionCount: number;
+  /** D-ETU-33 (JP 23/10) — recommandations au dirigeant pour la leçon. */
+  leaderNotes: string;
+  /** D-ETU-33 (JP 23/10) — actions des membres, une par ligne (↔ `memberActions`). */
+  memberActions: string;
 }
+
+/** D-ETU-33 — limites de l'avenant §2 (le backend reste juge : 400). */
+const LEADER_NOTES_MAX = 10000;
+const MEMBER_ACTIONS_MAX = 30;
+const MEMBER_ACTION_MAX_LENGTH = 2000;
+
+/** D-ETU-33 — une action par ligne : lignes trimées, lignes vides retirées. */
+const actionsOf = (text: string): string[] => text.split("\n").map((l) => l.trim()).filter(Boolean);
 
 /** RG-ASM-02 / RG-ETU-23 — un chapitre lu ou étudié se renomme, ne se retire ni ne se renumérote. */
 const isLocked = (c: ChapterRow) => c.read || c.studied;
@@ -77,6 +91,8 @@ interface FormState {
   language: Language;
   /** D-ETU-19 — vide = sans prérequis. */
   prerequisiteModuleId: string;
+  /** D-ETU-33 (JP 23/10) — recommandations au dirigeant pour l'unité. */
+  leaderNotes: string;
   withParts: boolean;
   sections: SectionRow[];
 }
@@ -86,6 +102,7 @@ const newKey = () => `row-${++rowSeq}`;
 
 const newChapterRow = (n: number): ChapterRow => ({
   key: newKey(), id: null, number: String(n), title: "", portion: "", read: false, studied: false, questionCount: 0,
+  leaderNotes: "", memberActions: "",
 });
 
 const newSection = (number: string, chapters: ChapterRow[] = []): SectionRow => ({
@@ -104,6 +121,7 @@ const emptyForm = (ministryId = ""): FormState => ({
   code: "",
   language: "FR",
   prerequisiteModuleId: "",
+  leaderNotes: "",
   withParts: false,
   sections: [newSection("")],
 });
@@ -113,9 +131,15 @@ function parseNumber(s: string): number | null {
   return Number.isInteger(n) && n >= 1 ? n : null;
 }
 
-/** Normalise une liste de chapitres envoyée au backend (ordre = ordre affiché, titre vide → null). */
+/**
+ * Normalise une liste de chapitres envoyée au backend (ordre = ordre affiché, titre vide → null).
+ * D-ETU-33 — `leaderNotes` / `memberActions` toujours envoyés : `""` / `[]` effacent (avenant §3).
+ */
 function toChapterInputs(rows: ChapterRow[]): ChapterInput[] {
-  return rows.map((r) => ({ number: parseNumber(r.number) ?? 0, title: r.title.trim() || null, portion: r.portion.trim() || null }));
+  return rows.map((r) => ({
+    number: parseNumber(r.number) ?? 0, title: r.title.trim() || null, portion: r.portion.trim() || null,
+    leaderNotes: r.leaderNotes.trim(), memberActions: actionsOf(r.memberActions),
+  }));
 }
 
 function toContent(form: FormState): TeachingContent {
@@ -132,7 +156,10 @@ function toContent(form: FormState): TeachingContent {
 /** Contenu actuel d'un module, dans la même forme que {@link toContent} (pour détecter un changement). */
 function contentOf(m: TeachingModuleResponse): TeachingContent {
   const chapters = [...m.chapters].sort((a, b) => a.orderIndex - b.orderIndex);
-  const input = (c: (typeof chapters)[number]): ChapterInput => ({ number: c.number, title: c.title ?? null, portion: c.portion ?? null });
+  const input = (c: (typeof chapters)[number]): ChapterInput => ({
+    number: c.number, title: c.title ?? null, portion: c.portion ?? null,
+    leaderNotes: c.leaderNotes ?? "", memberActions: c.memberActions ?? [],
+  });
   if (m.parts.length === 0) return { chapters: chapters.map(input) };
   return {
     parts: [...m.parts]
@@ -191,6 +218,10 @@ function chaptersErrorKey(rows: ChapterRow[]): string | null {
   if (rows.length === 0) return "teachingModules.errNoChapters";
   if (numbers.some((n) => n == null)) return "teachingModules.errInvalidNumber";
   if (new Set(numbers).size !== numbers.length) return "teachingModules.errDuplicateNumber";
+  // D-ETU-33 — limites de l'avenant §2.
+  if (rows.some((c) => c.leaderNotes.trim().length > LEADER_NOTES_MAX)) return "teachingModules.errLeaderNotesTooLong";
+  if (rows.some((c) => actionsOf(c.memberActions).length > MEMBER_ACTIONS_MAX)) return "teachingModules.errTooManyActions";
+  if (rows.some((c) => actionsOf(c.memberActions).some((a) => a.length > MEMBER_ACTION_MAX_LENGTH))) return "teachingModules.errActionTooLong";
   return null;
 }
 
@@ -255,10 +286,11 @@ export default function ModulesEnseignementPage() {
       const bookTitle = form.bookTitle.trim();
       const code = form.code.trim();
       const prerequisiteModuleId = form.prerequisiteModuleId;
+      const leaderNotes = form.leaderNotes.trim();
       if (!editing) {
         return createTeachingModule({
           ministryId: form.ministryId, name, bookTitle, code: code || null, language: form.language,
-          prerequisiteModuleId: prerequisiteModuleId || null, ...content,
+          prerequisiteModuleId: prerequisiteModuleId || null, leaderNotes: leaderNotes || null, ...content,
         });
       }
       let result = editing;
@@ -275,6 +307,8 @@ export default function ModulesEnseignementPage() {
         if (prerequisiteModuleId) patch.prerequisiteModuleId = prerequisiteModuleId;
         else patch.clearPrerequisite = true;
       }
+      // D-ETU-33 (JP 23/10) — absent = inchangé ; `""` = effacer.
+      if (leaderNotes !== (editing.leaderNotes ?? "")) patch.leaderNotes = leaderNotes;
       if (Object.keys(patch).length > 0) {
         result = await updateTeachingModule(editing.id, patch);
       }
@@ -308,6 +342,7 @@ export default function ModulesEnseignementPage() {
       list.map((c) => ({
         key: newKey(), id: c.id, number: String(c.number), title: c.title ?? "", portion: c.portion ?? "",
         read: c.read, studied: c.studied, questionCount: c.questionCount,
+        leaderNotes: c.leaderNotes ?? "", memberActions: (c.memberActions ?? []).join("\n"),
       }));
     const sections = m.parts.length === 0
       ? [newSection("", rowsOf(chapters))]
@@ -316,7 +351,7 @@ export default function ModulesEnseignementPage() {
           .map((p) => ({ ...newSection(String(p.number), rowsOf(chapters.filter((c) => c.partId === p.id))), title: p.title ?? "" }));
     setForm({
       ministryId: m.ministryId, name: m.name, bookTitle: m.bookTitle, code: m.code ?? "", language: m.language ?? "FR",
-      prerequisiteModuleId: m.prerequisiteModuleId ?? "", withParts: m.parts.length > 0, sections,
+      prerequisiteModuleId: m.prerequisiteModuleId ?? "", leaderNotes: m.leaderNotes ?? "", withParts: m.parts.length > 0, sections,
     });
     setOpen(true);
   };
@@ -365,8 +400,10 @@ export default function ModulesEnseignementPage() {
           : null;
   const hasChaptersError = form.sections.some((s) => chaptersErrorKey(s.chapters) != null);
   const chapterCount = form.sections.reduce((n, s) => n + s.chapters.length, 0);
+  const leaderNotesTooLong = form.leaderNotes.trim().length > LEADER_NOTES_MAX;
   const canSave =
-    !!form.ministryId && !!form.name.trim() && !!form.bookTitle.trim() && !partsError && !hasChaptersError && !saveM.isPending;
+    !!form.ministryId && !!form.name.trim() && !!form.bookTitle.trim() && !partsError && !hasChaptersError && !leaderNotesTooLong
+    && !saveM.isPending;
 
   // Éditeur de questions : seulement sur un chapitre enregistré dont la numérotation n'a pas bougé
   // (sinon la ligne ne désigne plus le chapitre du backend — rapprochement par partie et numéro).
@@ -570,6 +607,18 @@ export default function ModulesEnseignementPage() {
               </Select>
             </Field>
           </div>
+          {/* D-ETU-33 / D-ETU-37 (JP 23/10) — recommandations au dirigeant pour l'unité, texte brut. */}
+          <Field label={t("teachingModules.leaderNotesLabel")} hint={t("teachingModules.moduleLeaderNotesHint")}>
+            <textarea
+              className="input"
+              rows={4}
+              maxLength={LEADER_NOTES_MAX}
+              value={form.leaderNotes}
+              placeholder={t("teachingModules.leaderNotesPlaceholder")}
+              onChange={(e) => setForm({ ...form, leaderNotes: e.target.value })}
+            />
+            {leaderNotesTooLong && <span style={{ color: "var(--danger, #b4452f)", fontSize: 13 }}>{t("teachingModules.errLeaderNotesTooLong")}</span>}
+          </Field>
 
           <Field label={t("teachingModules.structureLabel")} hint={hasRead ? t("teachingModules.structureLocked") : t("teachingModules.structureHint")}>
             <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: hasRead ? "not-allowed" : "pointer", opacity: hasRead ? 0.6 : 1 }}>
@@ -708,6 +757,15 @@ function ChaptersEditor({
 }) {
   const { t } = useTranslation();
   const chapters = section.chapters;
+  /** D-ETU-33 — lignes dont les recommandations / actions sont dépliées. */
+  const [notesOpen, setNotesOpen] = useState<Set<string>>(() => new Set());
+  const toggleNotes = (key: string) =>
+    setNotesOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
 
   // Saisie rapide « 1 à N » : régénère la liste en conservant les titres déjà saisis pour les
   // numéros communs. RG-ASM-02 : un chapitre déjà lu hors de la plage est conservé.
@@ -759,57 +817,94 @@ function ChaptersEditor({
           {chapters.map((c) => {
             const locked = isLocked(c);
             const questionsTitle = !c.id ? t("teachingModules.questionsNewChapter") : questionsLockedReason ?? t("teachingModules.questionsOpen");
+            const expanded = notesOpen.has(c.key);
+            const notesCount = (c.leaderNotes.trim() ? 1 : 0) + actionsOf(c.memberActions).length;
             return (
-              <div key={c.key} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <Input
-                  type="number"
-                  min={1}
-                  style={{ width: 70 }}
-                  value={c.number}
-                  // RG-ASM-02 — le numéro identifie le chapitre : le changer revient à retirer un chapitre lu.
-                  disabled={locked}
-                  aria-label={t("teachingModules.numberLabel")}
-                  onChange={(e) => updateRow(c.key, { number: e.target.value })}
-                />
-                <div style={{ flex: 1, minWidth: 0 }}>
+              <div key={c.key} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <Input
-                    value={c.title}
-                    maxLength={300}
-                    placeholder={t("teachingModules.titlePlaceholder")}
-                    onChange={(e) => updateRow(c.key, { title: e.target.value })}
+                    type="number"
+                    min={1}
+                    style={{ width: 70 }}
+                    value={c.number}
+                    // RG-ASM-02 — le numéro identifie le chapitre : le changer revient à retirer un chapitre lu.
+                    disabled={locked}
+                    aria-label={t("teachingModules.numberLabel")}
+                    onChange={(e) => updateRow(c.key, { number: e.target.value })}
                   />
-                </div>
-                {/* D-ETU-02 — portion du livre lue avant la leçon. */}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <Input
-                    value={c.portion}
-                    maxLength={300}
-                    placeholder={t("teachingModules.portionPlaceholder")}
-                    aria-label={t("teachingModules.portionLabel")}
-                    onChange={(e) => updateRow(c.key, { portion: e.target.value })}
-                  />
-                </div>
-                {c.read && <Badge tone="earth">{t("teachingModules.readBadge")}</Badge>}
-                {c.studied && <Badge tone="green">{t("teachingModules.studiedBadge")}</Badge>}
-                {onOpenQuestions && (
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <Input
+                      value={c.title}
+                      maxLength={300}
+                      placeholder={t("teachingModules.titlePlaceholder")}
+                      onChange={(e) => updateRow(c.key, { title: e.target.value })}
+                    />
+                  </div>
+                  {/* D-ETU-02 — portion du livre lue avant la leçon. */}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <Input
+                      value={c.portion}
+                      maxLength={300}
+                      placeholder={t("teachingModules.portionPlaceholder")}
+                      aria-label={t("teachingModules.portionLabel")}
+                      onChange={(e) => updateRow(c.key, { portion: e.target.value })}
+                    />
+                  </div>
+                  {c.read && <Badge tone="earth">{t("teachingModules.readBadge")}</Badge>}
+                  {c.studied && <Badge tone="green">{t("teachingModules.studiedBadge")}</Badge>}
+                  {onOpenQuestions && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={!c.id || !!questionsLockedReason}
+                      title={questionsTitle}
+                      onClick={() => onOpenQuestions(c)}
+                      style={{ whiteSpace: "nowrap" }}
+                    >
+                      {t("teachingModules.questionsButton", { count: c.questionCount })}
+                    </Button>
+                  )}
+                  {/* D-ETU-33 (JP 23/10) — recommandations au dirigeant et actions des membres de la leçon. */}
                   <Button
                     variant="ghost"
                     size="sm"
-                    disabled={!c.id || !!questionsLockedReason}
-                    title={questionsTitle}
-                    onClick={() => onOpenQuestions(c)}
+                    title={t("teachingModules.notesToggleTitle")}
+                    onClick={() => toggleNotes(c.key)}
                     style={{ whiteSpace: "nowrap" }}
                   >
-                    {t("teachingModules.questionsButton", { count: c.questionCount })}
+                    {t("teachingModules.notesButton", { count: notesCount })}
                   </Button>
+                  <IconButton
+                    icon={<Icons.Trash size={14} />}
+                    danger
+                    disabled={locked}
+                    title={c.read ? t("teachingModules.cannotRemoveRead") : c.studied ? t("teachingModules.cannotRemoveStudied") : t("teachingModules.removeChapter")}
+                    onClick={() => !locked && removeRow(c.key)}
+                  />
+                </div>
+                {expanded && (
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginLeft: 78, paddingBottom: 6 }}>
+                    <Field label={t("teachingModules.leaderNotesLabel")} hint={t("teachingModules.lessonLeaderNotesHint")}>
+                      <textarea
+                        className="input"
+                        rows={4}
+                        maxLength={LEADER_NOTES_MAX}
+                        value={c.leaderNotes}
+                        placeholder={t("teachingModules.leaderNotesPlaceholder")}
+                        onChange={(e) => updateRow(c.key, { leaderNotes: e.target.value })}
+                      />
+                    </Field>
+                    <Field label={t("teachingModules.memberActionsLabel")} hint={t("teachingModules.memberActionsHint", { max: MEMBER_ACTIONS_MAX })}>
+                      <textarea
+                        className="input"
+                        rows={4}
+                        value={c.memberActions}
+                        placeholder={t("teachingModules.memberActionsPlaceholder")}
+                        onChange={(e) => updateRow(c.key, { memberActions: e.target.value })}
+                      />
+                    </Field>
+                  </div>
                 )}
-                <IconButton
-                  icon={<Icons.Trash size={14} />}
-                  danger
-                  disabled={locked}
-                  title={c.read ? t("teachingModules.cannotRemoveRead") : c.studied ? t("teachingModules.cannotRemoveStudied") : t("teachingModules.removeChapter")}
-                  onClick={() => !locked && removeRow(c.key)}
-                />
               </div>
             );
           })}
@@ -1461,6 +1556,10 @@ function ImportModal({
   });
 
   const questionTotal = (data?.lessons ?? []).reduce((n, l) => n + (Array.isArray(l?.questions) ? l.questions.length : 0), 0);
+  // D-ETU-33 (JP 23/10) — aperçu seulement : le fichier part tel quel (leaderNotes, memberActions).
+  const lessonsWithNotes = (data?.lessons ?? []).filter((l) => typeof l?.leaderNotes === "string" && l.leaderNotes.trim()).length;
+  const actionTotal = (data?.lessons ?? []).reduce((n, l) => n + (Array.isArray(l?.memberActions) ? l.memberActions.length : 0), 0);
+  const moduleHasNotes = typeof data?.leaderNotes === "string" && !!data.leaderNotes.trim();
 
   return (
     <Modal
@@ -1522,6 +1621,12 @@ function ImportModal({
             <div style={{ marginTop: 4 }}>
               {t("teachingModules.import.lessonCount", { count: data.lessons.length })} · {t("teachingModules.questionCount", { count: questionTotal })}
             </div>
+            {(moduleHasNotes || lessonsWithNotes > 0 || actionTotal > 0) && (
+              <div style={{ marginTop: 4, color: "var(--ink-500)" }}>
+                {moduleHasNotes && <>{t("teachingModules.import.moduleNotes")} · </>}
+                {t("teachingModules.import.lessonNotesCount", { count: lessonsWithNotes })} · {t("teachingModules.import.actionCount", { count: actionTotal })}
+              </div>
+            )}
           </div>
         )}
         {submitError && <div style={contentInvalidStyle}>{submitError}</div>}

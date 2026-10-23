@@ -6,6 +6,10 @@ import type { Language } from "./orgService";
 // D-ETU-01 / D-ETU-02 (JP 21/10) — Étude de l'assemblée : un module est une « unité » d'étude
 // (`code`, prérequis), un chapitre une « leçon » (`portion`, questions). Contrat figé :
 // cmfipraise-backend/docs/shephr/21_10_2026/02_Contrat_API_Etude.md §3 (D-ETU-15 : pas de page à part).
+// D-ETU-33 (JP 23/10) — avenant 04_Avenant_Notes_Dirigeant.md : recommandations au dirigeant
+// (`leaderNotes`, unité et leçon, texte brut ≤ 10 000) et actions des membres (`memberActions`,
+// leçon, ≤ 30 textes de ≤ 2 000) ; lues, écrites et importées ici. Le backend normalise (trim,
+// blanc → null, liste vide → null).
 
 // Mirrors com.excellence.back.assembly.StudyQuestion.Type (RG-ETU-20) — mêmes noms dans les trois fronts (§8).
 export type StudyQuestionType = "VRAI_FAUX" | "OUI_NON" | "CHOIX_UNIQUE" | "CHOIX_MULTIPLE"
@@ -34,6 +38,10 @@ export interface TeachingChapterResponse {
   questionCount: number;
   /** RG-ETU-23 — a au moins une séance d'étude : comme `read`, interdit de retirer le chapitre. */
   studied: boolean;
+  /** D-ETU-33 (JP 23/10) — recommandations au dirigeant pour la leçon ; null = aucune. */
+  leaderNotes?: string | null;
+  /** D-ETU-33 (JP 23/10) — « Chaque membre de l'assemblée doit : … » ; null = aucune. */
+  memberActions?: string[] | null;
 }
 
 // Mirrors com.excellence.back.assembly.admin.dto.TeachingModuleAdminDtos.TeachingPartResponse
@@ -64,6 +72,8 @@ export interface TeachingModuleResponse {
   language: Language;
   /** D-ETU-19 — unité à terminer (dans l'assemblée) avant d'ouvrir une leçon de celle-ci. */
   prerequisiteModuleId: string | null;
+  /** D-ETU-33 (JP 23/10) — recommandations au dirigeant pour l'unité (présentation du manuel) ; null = aucune. */
+  leaderNotes?: string | null;
   /** Vide = module sans parties ; sinon chaque chapitre porte son partId. */
   parts: TeachingPartResponse[];
   /** Tous les chapitres du module, triés par orderIndex (rang dans le module entier). */
@@ -78,6 +88,13 @@ export interface ChapterInput {
   title?: string | null;
   /** D-ETU-02 — portion du livre (≤ 300). */
   portion?: string | null;
+  /**
+   * D-ETU-33 (JP 23/10) — ≤ 10 000. Chapitre existant : null / absent = inchangé, `""` = effacer ;
+   * nouveau chapitre : null = vide.
+   */
+  leaderNotes?: string | null;
+  /** D-ETU-33 (JP 23/10) — ≤ 30 éléments de ≤ 2 000. Chapitre existant : null = inchangé, `[]` = effacer. */
+  memberActions?: string[] | null;
 }
 
 // Mirrors com.excellence.back.assembly.admin.dto.TeachingModuleAdminDtos.PartInput
@@ -104,6 +121,8 @@ export type CreateTeachingModuleRequest = {
   language?: Language | null;
   /** RG-ETU-24 — même ministère, pas soi-même, pas de cycle (422 `STUDY_PREREQUISITE_INVALID`). */
   prerequisiteModuleId?: string | null;
+  /** D-ETU-33 (JP 23/10) — facultatif, ≤ 10 000. */
+  leaderNotes?: string | null;
 } & TeachingContent;
 
 // Mirrors com.excellence.back.assembly.admin.dto.TeachingModuleAdminDtos.UpdateTeachingModuleRequest
@@ -120,6 +139,8 @@ export interface UpdateTeachingModuleRequest {
   clearPrerequisite?: boolean;
   /** D-ETU-25 (JP 21/10) — absent = inchangé ; (code, langue) déjà pris → 422 `TEACHING_MODULE_CODE_EXISTS`. */
   language?: Language;
+  /** D-ETU-33 (JP 23/10) — absent = inchangé ; `""` = effacer ; ≤ 10 000. */
+  leaderNotes?: string;
 }
 
 // Mirrors com.excellence.back.assembly.admin.dto.TeachingModuleAdminDtos.StudyQuestionInput
@@ -170,6 +191,10 @@ export interface StudyImportLesson {
   number: number;
   title?: string | null;
   portion?: string | null;
+  /** D-ETU-33 (JP 23/10) — transmis tel quel depuis le fichier d'import. */
+  leaderNotes?: string | null;
+  /** D-ETU-33 (JP 23/10) — transmis tel quel depuis le fichier d'import. */
+  memberActions?: string[] | null;
   questions?: StudyQuestionInput[] | null;
 }
 
@@ -182,6 +207,8 @@ export interface StudyImportRequest {
   /** D-ETU-25 (JP 21/10) — facultatif, défaut `FR` ; lu dans le fichier s'il y figure. */
   language?: Language | null;
   prerequisiteModuleId?: string | null;
+  /** D-ETU-33 (JP 23/10) — transmis tel quel depuis le fichier d'import (`_lisezMoi` et autres champs inconnus : ignorés par le backend). */
+  leaderNotes?: string | null;
   lessons: StudyImportLesson[];
 }
 

@@ -349,7 +349,12 @@
       "importing": "Importing…",
       "doneToast": "Module imported (deactivated)",
       "languageLabel": "Unit language",
-      "languageFromFile": "Language read from the file ({{lang}})."
+      "languageFromFile": "Language read from the file ({{lang}}).",
+      "moduleNotes": "Unit recommendations",
+      "lessonNotesCount_one": "{{count}} lesson with recommendations",
+      "lessonNotesCount_other": "{{count}} lessons with recommendations",
+      "actionCount_one": "{{count}} member action",
+      "actionCount_other": "{{count}} member actions"
     },
     "questions": {
       "lesson": "Lesson {{number}}",
@@ -438,7 +443,20 @@
       "FR": "Français",
       "EN": "English"
     },
-    "colLanguage": "Language"
+    "colLanguage": "Language",
+    "leaderNotesLabel": "Recommendations for the leader",
+    "leaderNotesPlaceholder": "Plain text, line breaks kept",
+    "moduleLeaderNotesHint": "Shown only to the assembly leader before the unit's first lesson.",
+    "lessonLeaderNotesHint": "Shown only to the assembly leader before starting the lesson.",
+    "memberActionsLabel": "Member actions",
+    "memberActionsPlaceholder": "One action per line",
+    "memberActionsHint": "One action per line ({{max}} at most) — shown to everyone once the session is finished.",
+    "notesButton_one": "Notes ({{count}})",
+    "notesButton_other": "Notes ({{count}})",
+    "notesToggleTitle": "Recommendations for the leader and member actions",
+    "errLeaderNotesTooLong": "Recommendations too long (10,000 characters at most).",
+    "errTooManyActions": "30 member actions at most per lesson.",
+    "errActionTooLong": "A member action exceeds 2,000 characters."
   },
   "eventTypes": {
     "title": "Event types",
