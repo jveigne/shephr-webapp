@@ -21,6 +21,9 @@ const NAV: NavSection[] = [
     sectionKey: "nav.billing",
     items: [
       { id: "abonnements", labelKey: "nav.subscriptions", icon: "Currency", path: "/abonnements" },
+      // D-ABO-15 (JP 23/10) — facturation (abonnements payants, factures, offres, codes promo), à côté
+      // des Abonnements qui gardent l'accès aux modules (D-ABO-01).
+      { id: "facturation", labelKey: "nav.invoicing", icon: "Tag", path: "/facturation" },
       // D-ASM-10 (JP 23/09) — référentiel des modules d'enseignement, à côté des Abonnements (§6.1).
       { id: "modules-enseignement", labelKey: "nav.teachingModules", icon: "Folder", path: "/modules-enseignement" },
       // RG-EVT-01 (JP 14/10) — catalogue des types d'évènement, à côté des modules d'enseignement (§6.1).

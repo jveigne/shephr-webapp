@@ -14,6 +14,7 @@ import StructurePage from "@/pages/Structure";
 import DemandesPage from "@/pages/Demandes";
 import UtilisateursPage from "@/pages/Utilisateurs";
 import AbonnementsPage from "@/pages/Abonnements";
+import FacturationPage from "@/pages/Facturation";
 import ModulesEnseignementPage from "@/pages/ModulesEnseignement";
 import TypesEvenementPage from "@/pages/TypesEvenement";
 import DocumentsPage from "@/pages/Documents";
@@ -62,6 +63,8 @@ export default function App() {
               <Route path="/demandes" element={<Shielded><DemandesPage /></Shielded>} />
               <Route path="/utilisateurs" element={<Shielded><UtilisateursPage /></Shielded>} />
               <Route path="/abonnements" element={<Shielded><AbonnementsPage /></Shielded>} />
+              {/* D-ABO-15 (JP 23/10) — facturation des abonnements payants (§6.3 du plan Abonnements payants) */}
+              <Route path="/facturation" element={<Shielded><FacturationPage /></Shielded>} />
               {/* D-ASM-10 (JP 23/09) — modules d'enseignement par ministère */}
               <Route path="/modules-enseignement" element={<Shielded><ModulesEnseignementPage /></Shielded>} />
               {/* RG-EVT-01 (JP 14/10) — types d'évènement par ministère (§6.1 du plan Évènements) */}

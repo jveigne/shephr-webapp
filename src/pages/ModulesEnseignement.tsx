@@ -483,6 +483,7 @@ export default function ModulesEnseignementPage() {
         }
       />
       <div className="content">
+        {/* D-ETU-29 / D-ETU-32 (JP 23/10) — catalogue commun aux modules ASSEMBLY (CR) et STUDY (étude) : l'aide le dit. */}
         <p className="section-sub">
           <Trans i18nKey="teachingModules.intro" components={{ strong: <strong /> }} />
         </p>

@@ -52,6 +52,34 @@ export async function apiFetchMultipart<T>(path: string, body: FormData, method:
   return readResponse<T>(res);
 }
 
+/**
+ * Téléchargement authentifié d'un fichier (D-ABO-09, JP 23/10 — PDF de facture, export CSV) : les
+ * octets passent par le Bearer, jamais par une URL signée. Le nom vient de `Content-Disposition`
+ * quand le serveur le pose, sinon `fallbackName`.
+ */
+export async function apiFetchBlob(path: string, fallbackName: string): Promise<{ blob: Blob; filename: string }> {
+  const token = getStoredToken();
+  const res = await fetch(`${API_URL}${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) await readResponse<never>(res);
+  const cd = res.headers.get("Content-Disposition") ?? "";
+  const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd);
+  return { blob: await res.blob(), filename: m ? decodeURIComponent(m[1]) : fallbackName };
+}
+
+/** Propose au navigateur d'enregistrer un fichier obtenu par {@link apiFetchBlob}. */
+export function saveBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 async function readResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let body: any = null;
@@ -60,5 +88,7 @@ async function readResponse<T>(res: Response): Promise<T> {
     throw new ApiRequestError(message, body?.error ?? null, res.status);
   }
   if (res.status === 204) return undefined as T;
-  return res.json() as Promise<T>;
+  // 202 / 200 sans corps (D-ABO-09 : `POST /admin/billing/invoices/{n}/resend` répond 202 vide).
+  const text = await res.text();
+  return (text ? JSON.parse(text) : undefined) as T;
 }

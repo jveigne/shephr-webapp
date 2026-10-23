@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Trans, useTranslation } from "react-i18next";
 import { Icons } from "@/components/icons";
@@ -94,7 +95,10 @@ export default function AbonnementsPage() {
   const { t, i18n } = useTranslation();
   const dateLocale = (i18n.resolvedLanguage || i18n.language) === "en" ? "en-GB" : "fr-FR";
 
-  const [ministryId, setMinistryId] = useState("");
+  // D-ABO-15 (JP 23/10) — `?ministryId=` : ouverte depuis la fiche d'un abonnement payant
+  // (/facturation), la page arrive sur la couverture de modules de ce ministère.
+  const [searchParams] = useSearchParams();
+  const [ministryId, setMinistryId] = useState(() => searchParams.get("ministryId") ?? "");
   const [drawerNode, setDrawerNode] = useState<TreeNode | null>(null);
   const [activateNode, setActivateNode] = useState<TreeNode | null>(null);
   const [form, setForm] = useState(ACTIVATE_EMPTY);
