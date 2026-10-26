@@ -126,6 +126,8 @@ export interface AdminDocumentStats {
   installClicks: number;
   openApp: number;
   shares: number;
+  /** D-DOC-16 (JP 26/10) — D-DOC-18 : événements `DOWNLOAD` (« Enregistrer / Envoyer le PDF » de l'app). */
+  downloads: number;
   /** COUNT(DISTINCT visitor_id), tous événements (D-DOC-15 : identifiant aléatoire, jamais d'IP). */
   uniqueVisitors: number;
 }
@@ -156,6 +158,12 @@ export interface AdminDocument {
   available: boolean;
   freePages: number;
   open: boolean;
+  /**
+   * D-DOC-16 (JP 26/10) — l'app propose « Enregistrer / Envoyer le PDF » quand elle affiche le PDF
+   * complet (D-DOC-17). Vrai par défaut (migration : TRUE pour tous les documents existants) ;
+   * n'ouvre aucun accès de plus (D-DOC-05, RG-DOC-01b inchangés).
+   */
+  downloadable: boolean;
   pageCount: number;
   /** RG-DOC-08 — 1 à la création, +1 à chaque remplacement du fichier. */
   version: number;
@@ -184,6 +192,8 @@ export interface AdminDocumentCreateRequest {
   /** ≥ 1, ≤ pageCount (422 DOC_FREE_PAGES_OUT_OF_RANGE) ; absent → min(5, pageCount). */
   freePages?: number;
   open?: boolean;
+  /** D-DOC-16 (JP 26/10) — absent = true (case « Téléchargeable » cochée par défaut). */
+  downloadable?: boolean;
   expiresAt?: string;
 }
 
@@ -202,6 +212,8 @@ export interface AdminDocumentUpdateRequest {
   categoryId?: string;
   freePages: number;
   open: boolean;
+  /** D-DOC-16 (JP 26/10) — facultatif : absent = inchangé (exception au remplacement complet) ; le formulaire l'envoie toujours. */
+  downloadable?: boolean;
   /** Absent = n'expire plus. */
   expiresAt?: string;
 }

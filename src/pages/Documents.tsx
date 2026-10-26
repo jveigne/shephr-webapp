@@ -78,6 +78,8 @@ interface PreviewForm {
   /** Texte libre pour laisser l'input éditable ; borné [1, pageCount] avant envoi (RG-DOC-01c). */
   freePages: string;
   open: boolean;
+  /** D-DOC-16 (JP 26/10) — case « Téléchargeable », cochée par défaut. */
+  downloadable: boolean;
   /** `datetime-local` (heure locale du navigateur) ; vide = n'expire pas (RG-DOC-05). */
   expiresAt: string;
 }
@@ -122,6 +124,8 @@ const metaOf = (d: AdminDocument): MetaForm => ({
 const previewOf = (d: AdminDocument): PreviewForm => ({
   freePages: String(d.freePages),
   open: d.open,
+  // D-DOC-16 (JP 26/10) — seul un `false` explicite décoche (backend pas encore migré = coché).
+  downloadable: d.downloadable !== false,
   expiresAt: d.expiresAt ? toLocalInput(d.expiresAt) : "",
 });
 
@@ -163,6 +167,7 @@ function updateRequestOf(meta: MetaForm, preview: PreviewForm, pageCount: number
     categoryId: meta.categoryId || undefined,
     freePages: parseFreePages(preview.freePages, pageCount) ?? 1,
     open: preview.open,
+    downloadable: preview.downloadable,
     expiresAt: fromLocalInput(preview.expiresAt),
   };
 }
@@ -179,6 +184,8 @@ function createRequestOf(ministryId: string, meta: MetaForm, title: string): Adm
     scopeLevel: scope.level,
     scopeId: scope.level === "MINISTRY" ? undefined : scope.id ?? undefined,
     categoryId: meta.categoryId || undefined,
+    // D-DOC-16 (JP 26/10) — téléchargeable par défaut, dépôt multiple compris (réglable ensuite par document).
+    downloadable: true,
   };
 }
 
@@ -327,7 +334,7 @@ export default function DocumentsPage() {
   /** Dépôt multiple : publier chaque document dès sa création (sinon brouillons). */
   const [batchPublish, setBatchPublish] = useState(false);
   const [meta, setMeta] = useState<MetaForm>(emptyMeta);
-  const [preview, setPreview] = useState<PreviewForm>({ freePages: "", open: false, expiresAt: "" });
+  const [preview, setPreview] = useState<PreviewForm>({ freePages: "", open: false, downloadable: true, expiresAt: "" });
   const [created, setCreated] = useState<AdminDocument | null>(null);
 
   const formCategoriesQ = useQuery({
@@ -343,7 +350,7 @@ export default function DocumentsPage() {
     setBatchPublish(false);
     // D-DOC-16 (JP 19/10) — déposer depuis un dossier sélectionné le range dans ce dossier.
     setMeta({ ...emptyMeta(), categoryId: selectedNode ? selectedNode.folder.id : "" });
-    setPreview({ freePages: "", open: false, expiresAt: "" });
+    setPreview({ freePages: "", open: false, downloadable: true, expiresAt: "" });
     setCreated(null);
     setCreateOpen(true);
   };
@@ -486,7 +493,7 @@ export default function DocumentsPage() {
   // ---- Modification des métadonnées (PATCH complet) ----
   const [editing, setEditing] = useState<AdminDocument | null>(null);
   const [editMeta, setEditMeta] = useState<MetaForm>(emptyMeta);
-  const [editPreview, setEditPreview] = useState<PreviewForm>({ freePages: "", open: false, expiresAt: "" });
+  const [editPreview, setEditPreview] = useState<PreviewForm>({ freePages: "", open: false, downloadable: true, expiresAt: "" });
   const editCategoriesQ = useQuery({
     queryKey: ["document-categories", editing?.ministryId ?? ""],
     queryFn: () => listDocumentCategories(editing!.ministryId),
@@ -639,6 +646,15 @@ export default function DocumentsPage() {
         d.open
           ? <Badge tone="green">{t("documents.openBadge")}</Badge>
           : <span className="mono" style={{ color: "var(--ink-700)" }}>{t("documents.previewPages", { free: Math.min(d.freePages, d.pageCount), total: d.pageCount })}</span>,
+    },
+    {
+      // D-DOC-16 (JP 26/10) — téléchargeable par défaut : on ne signale que l'exception.
+      label: t("documents.colDownload"),
+      cellStyle: { whiteSpace: "nowrap" as const },
+      render: (d: AdminDocument) =>
+        d.downloadable === false
+          ? <Badge tone="gray">{t("documents.notDownloadableBadge")}</Badge>
+          : <span title={t("documents.downloadableLabel")} style={{ color: "var(--ink-500)", display: "inline-flex" }}><Icons.Download size={15} /></span>,
     },
     { label: t("documents.colStatus"), render: statusBadges },
     {
@@ -1046,6 +1062,8 @@ export default function DocumentsPage() {
                 <Stat label={t("documents.stats.installClicks")} value={detail.stats.installClicks} />
                 <Stat label={t("documents.stats.openApp")} value={detail.stats.openApp} />
                 <Stat label={t("documents.stats.shares")} value={detail.stats.shares} />
+                {/* D-DOC-16 (JP 26/10) — D-DOC-18 : compteur des « Enregistrer / Envoyer le PDF » de l'app. */}
+                <Stat label={t("documents.stats.downloads")} value={detail.stats.downloads ?? 0} />
                 <Stat label={t("documents.stats.uniqueVisitors")} value={detail.stats.uniqueVisitors} />
               </div>
               <div style={{ fontSize: 12, color: "var(--ink-400)", marginTop: 6 }}>{t("documents.statsHint")}</div>
@@ -1064,6 +1082,7 @@ export default function DocumentsPage() {
                     ? t("documents.openFull", { total: detail.pageCount })
                     : t("documents.previewPages", { free: Math.min(detail.freePages, detail.pageCount), total: detail.pageCount })}
                 />
+                <InfoRow label={t("documents.colDownload")} value={detail.downloadable === false ? t("documents.notDownloadable") : t("documents.downloadableYes")} />
                 <InfoRow label={t("documents.fileLabel")} value={t("documents.fileInfo", { size: (detail.fileSize / 1_048_576).toFixed(1), version: detail.version })} />
                 <InfoRow label={t("documents.expiresAtLabel")} value={detail.expiresAt ? fmtDateTime(detail.expiresAt) : t("documents.neverExpires")} />
                 <InfoRow label={t("documents.publishedAtLabel")} value={fmtDateTime(detail.publishedAt)} />
@@ -1580,6 +1599,15 @@ function PreviewFields({
           <Checkbox checked={preview.open} onChange={(v) => !disabled && setPreview((p) => ({ ...p, open: v }))} />
           <span style={{ cursor: "pointer" }} onClick={() => !disabled && setPreview((p) => ({ ...p, open: !p.open }))}>
             {t("documents.openLabel")}
+          </span>
+        </div>
+      </Field>
+      {/* D-DOC-16 (JP 26/10) — D-DOC-17 : « Enregistrer / Envoyer le PDF » dans l'app, là où elle affiche déjà le PDF complet. */}
+      <Field hint={t("documents.downloadableHint")}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <Checkbox checked={preview.downloadable} onChange={(v) => !disabled && setPreview((p) => ({ ...p, downloadable: v }))} />
+          <span style={{ cursor: "pointer" }} onClick={() => !disabled && setPreview((p) => ({ ...p, downloadable: !p.downloadable }))}>
+            {t("documents.downloadableLabel")}
           </span>
         </div>
       </Field>
