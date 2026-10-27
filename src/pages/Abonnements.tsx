@@ -2,28 +2,57 @@ import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Trans, useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { Icons } from "@/components/icons";
 import { Badge, Button, Checkbox, Drawer, Field, IconButton, Input, Modal, Select, Toggle, TopBar } from "@/components/primitives";
 import { useToasts } from "@/context/ToastContext";
+import { apiErrorCode } from "@/services/api";
 import { buildTree, type TreeNode } from "@/lib/orgTree";
 import { listMinistries, type MinistryResponse } from "@/services/ministryService";
 import {
+  createModuleExclusion,
   createSubscription,
+  deleteModuleExclusion,
   fetchMinistryOrg,
+  listModuleExclusions,
   listModules,
   listSubscriptions,
-  pricingQuote,
   reactivateSubscription,
   suspendSubscription,
   updateModule,
+  accordGrantsModule,
+  HIERARCHIE_SUIVI,
   type BillingPeriod,
-  type PricingQuoteResponse,
-  type PricingZone,
+  type ModuleResponse,
   type SubscriptionScope,
   type SubscriptionResponse,
 } from "@/services/subscriptionService";
 
-const ZONES: PricingZone[] = ["A", "B", "C", "D"];
+// P-11 / O12 (JP 27/10, lot « Offres Caleb / Néhémie ») — plus de zone tarifaire A–D, de palier, de remise
+// CMCI ni de devis (`/admin/pricing/*` retiré) : la couverture posée ici est un ACCORD (ex. ETUDE_SUIVI au
+// niveau ministère / nation / région, D-ABO-28), son prix éventuel est une simple information saisie à la main.
+// §3.7 + P-06 (JP 27/10) — HIERARCHIE_SUIVI (Caleb, droit de CHAÎNE) n'est ouvert par un accord que s'il est
+// de portée MINISTÈRE **et** marqué « Accord CMCI » (`cmci`, `Subscription#grantsModule`) ; les autres
+// ministères passent par l'activation manuelle d'un dirigeant (/facturation). Le booléen `cmci` n'est plus une
+// remise : c'est ce marqueur, qu'on coche dans la modale « Activer ici » au niveau du ministère.
+// D-OFF-01 (JP 27/10) — les modules GRATUITS (ASSEMBLY, EVENTS, DOCUMENTS, MEMBER_CARE…) sont ouverts par défaut
+// à tous les ministères ; l'interrupteur « Activé pour ce ministère » crée / supprime une exclusion
+// (`/admin/modules/exclusions`). L'interrupteur global `enabled` du catalogue coupe toujours pour tous.
+
+/** §3.7 + P-06 (JP 27/10) — code de droit de CHAÎNE (Caleb) : un accord ne l'ouvre qu'au niveau du ministère et CMCI. */
+const MINISTRY_ONLY_CODE = HIERARCHIE_SUIVI;
+
+/** Code d'erreur traduit (`subscriptions.errors.*`, puis `billing.errors.*`), repli sur le message du serveur. */
+function errMsg(t: TFunction, e: unknown): string {
+  const code = apiErrorCode(e);
+  if (code) {
+    for (const key of [`subscriptions.errors.${code}`, `billing.errors.${code}`]) {
+      const tr = t(key);
+      if (tr !== key) return tr;
+    }
+  }
+  return e instanceof Error ? e.message : t("common.error");
+}
 
 function grants(s: SubscriptionResponse): boolean {
   return s.effectiveStatus === "ACTIVE";
@@ -42,7 +71,8 @@ function buildCoverage(root: TreeNode, subsByEntity: Map<string, SubscriptionRes
     out.set(node.id, { directSubs: direct, inherited: new Map(inheritedFromAncestors) });
     const passDown = new Map(inheritedFromAncestors);
     for (const s of direct) {
-      if (grants(s)) for (const m of s.moduleCodes) passDown.set(m, { nodeId: node.id, nodeName: node.name });
+      // §3.7 + P-06 — un accord HIERARCHIE_SUIVI hors ministère ou sans CMCI n'ouvre rien : il ne descend pas.
+      for (const m of s.moduleCodes) if (accordGrantsModule(s, m)) passDown.set(m, { nodeId: node.id, nodeName: node.name });
     }
     for (const c of node.children) walk(c, passDown);
   };
@@ -50,11 +80,13 @@ function buildCoverage(root: TreeNode, subsByEntity: Map<string, SubscriptionRes
   return out;
 }
 
-type ModuleState = "active" | "inherited" | "suspended" | "none";
+// « inert » : accord actif qui porte le code sans l'ouvrir (HIERARCHIE_SUIVI hors ministère ou sans CMCI — §3.7 + P-06).
+type ModuleState = "active" | "inherited" | "inert" | "suspended" | "none";
 function moduleState(cov: NodeCov | undefined, code: string): ModuleState {
   if (!cov) return "none";
-  if (cov.directSubs.some((s) => grants(s) && s.moduleCodes.includes(code))) return "active";
+  if (cov.directSubs.some((s) => accordGrantsModule(s, code))) return "active";
   if (cov.inherited.has(code)) return "inherited";
+  if (cov.directSubs.some((s) => grants(s) && s.moduleCodes.includes(code))) return "inert";
   if (cov.directSubs.some((s) => !grants(s) && s.moduleCodes.includes(code))) return "suspended";
   return "none";
 }
@@ -79,14 +111,14 @@ function todayPlusYearISO(): string {
 
 const ACTIVATE_EMPTY = {
   modules: [] as string[],
-  zone: "A" as PricingZone,
-  cmci: false,
   billingPeriod: "ANNUAL" as BillingPeriod,
   startDate: "",
   endDate: "",
   priceAmount: "",
   priceCurrency: "",
   notes: "",
+  // §3.7 + P-06 (JP 27/10) — « Accord CMCI » : seule voie, au niveau MINISTÈRE, pour qu'un accord ouvre HIERARCHIE_SUIVI.
+  cmci: false,
 };
 
 export default function AbonnementsPage() {
@@ -102,7 +134,6 @@ export default function AbonnementsPage() {
   const [drawerNode, setDrawerNode] = useState<TreeNode | null>(null);
   const [activateNode, setActivateNode] = useState<TreeNode | null>(null);
   const [form, setForm] = useState(ACTIVATE_EMPTY);
-  const [quote, setQuote] = useState<PricingQuoteResponse | null>(null);
   const [reactivateSub, setReactivateSub] = useState<SubscriptionResponse | null>(null);
   const [reEndDate, setReEndDate] = useState("");
 
@@ -155,7 +186,31 @@ export default function AbonnementsPage() {
       qc.invalidateQueries({ queryKey: ["modules"] });
       push({ kind: "ok", title: t("subscriptions.moduleUpdated"), msg: "" });
     },
-    onError: (e: unknown) => push({ kind: "error", title: t("common.failure"), msg: e instanceof Error ? e.message : t("common.error") }),
+    onError: (e: unknown) => push({ kind: "error", title: t("common.failure"), msg: errMsg(t, e) }),
+  });
+
+  // D-OFF-01 (JP 27/10) — exclusions du ministère choisi : un module gratuit exclu est DÉSACTIVÉ pour lui.
+  const exclusionsQ = useQuery({
+    queryKey: ["module-exclusions", ministryId],
+    queryFn: () => listModuleExclusions(ministryId),
+    enabled: !!ministryId,
+  });
+  const excluded = useMemo(() => new Set((exclusionsQ.data ?? []).map((x) => x.moduleCode)), [exclusionsQ.data]);
+  const freeModules = (modulesQ.data ?? []).filter((m) => m.free);
+  const exclusionM = useMutation({
+    mutationFn: async (v: { code: string; enabledForMinistry: boolean }): Promise<void> => {
+      if (v.enabledForMinistry) await deleteModuleExclusion(ministryId, v.code);
+      else await createModuleExclusion(ministryId, v.code);
+    },
+    onSuccess: (_r, v) => {
+      qc.invalidateQueries({ queryKey: ["module-exclusions", ministryId] });
+      push({
+        kind: "ok",
+        title: v.enabledForMinistry ? t("subscriptions.exclusions.enabledToast") : t("subscriptions.exclusions.disabledToast"),
+        msg: `${moduleName(v.code)} · ${ministryName}`,
+      });
+    },
+    onError: (e: unknown) => push({ kind: "error", title: t("common.failure"), msg: errMsg(t, e) }),
   });
 
   const invalidateMinistry = () => {
@@ -165,7 +220,7 @@ export default function AbonnementsPage() {
   const suspendM = useMutation({
     mutationFn: (id: string) => suspendSubscription(id),
     onSuccess: () => { invalidateMinistry(); push({ kind: "ok", title: t("subscriptions.suspendedToast"), msg: "" }); },
-    onError: (e: unknown) => push({ kind: "error", title: t("common.failure"), msg: e instanceof Error ? e.message : t("common.error") }),
+    onError: (e: unknown) => push({ kind: "error", title: t("common.failure"), msg: errMsg(t, e) }),
   });
 
   const reactivateM = useMutation({
@@ -175,33 +230,7 @@ export default function AbonnementsPage() {
       setReactivateSub(null);
       push({ kind: "ok", title: t("subscriptions.reactivatedToast"), msg: "" });
     },
-    onError: (e: unknown) => push({ kind: "error", title: t("subscriptions.reactivateFailToast"), msg: e instanceof Error ? e.message : t("common.error") }),
-  });
-
-  const quoteM = useMutation({
-    mutationFn: () =>
-      pricingQuote({
-        scope: activateNode!.level as SubscriptionScope,
-        scopeEntityId: activateNode!.id,
-        moduleCodes: form.modules,
-        zone: form.zone,
-        cmci: form.cmci,
-      }),
-    onSuccess: (q) => {
-      setQuote(q);
-      const priced = q.lines.filter((l) => !l.onQuote && l.finalAmount != null);
-      const currencies = new Set(priced.map((l) => l.currency));
-      if (priced.length > 0 && currencies.size === 1) {
-        const total = priced.reduce((s, l) => s + (l.finalAmount ?? 0), 0);
-        setForm((f) => ({
-          ...f,
-          priceAmount: String(Math.round(total * 100) / 100),
-          priceCurrency: priced[0].currency ?? "",
-          billingPeriod: priced[0].billingPeriod ?? f.billingPeriod,
-        }));
-      }
-    },
-    onError: (e: unknown) => push({ kind: "error", title: t("subscriptions.quoteFailToast"), msg: e instanceof Error ? e.message : t("common.error") }),
+    onError: (e: unknown) => push({ kind: "error", title: t("subscriptions.reactivateFailToast"), msg: errMsg(t, e) }),
   });
 
   const createM = useMutation({
@@ -211,9 +240,8 @@ export default function AbonnementsPage() {
         ministryId,
         scope: activateNode!.level as SubscriptionScope,
         scopeEntityId: activateNode!.id,
-        tier: quote?.tier ?? null,
-        pricingZone: form.zone,
-        cmci: form.cmci,
+        // §3.7 + P-06 — le marqueur n'a de sens qu'au niveau du ministère (le serveur l'ignore ailleurs pour HIERARCHIE_SUIVI).
+        cmci: activateNode!.level === "MINISTRY" && form.cmci,
         priceAmount: form.priceAmount ? Number(form.priceAmount) : null,
         priceCurrency: form.priceCurrency || null,
         billingPeriod: form.billingPeriod,
@@ -225,15 +253,13 @@ export default function AbonnementsPage() {
       invalidateMinistry();
       setActivateNode(null);
       setForm(ACTIVATE_EMPTY);
-      setQuote(null);
       push({ kind: "ok", title: t("subscriptions.createdToast"), msg: "" });
     },
-    onError: (e: unknown) => push({ kind: "error", title: t("subscriptions.createFailToast"), msg: e instanceof Error ? e.message : t("common.error") }),
+    onError: (e: unknown) => push({ kind: "error", title: t("subscriptions.createFailToast"), msg: errMsg(t, e) }),
   });
 
   const openActivate = (node: TreeNode) => {
     setForm({ ...ACTIVATE_EMPTY });
-    setQuote(null);
     setActivateNode(node);
   };
 
@@ -242,7 +268,7 @@ export default function AbonnementsPage() {
   const moduleAlreadyDirect = (code: string) =>
     !!activateCov?.directSubs.some((s) => grants(s) && s.moduleCodes.includes(code));
 
-  const canQuote = !!activateNode && form.modules.length > 0;
+  const canCreate = !!activateNode && form.modules.length > 0;
 
   return (
     <>
@@ -286,6 +312,26 @@ export default function AbonnementsPage() {
             <div className="spacer" style={{ flex: 1 }} />
             <Legend t={t} />
           </div>
+
+          {/* D-OFF-01 (JP 27/10) — modules gratuits : ouverts par défaut, désactivables pour CE ministère. */}
+          {ministryId && (
+            <FreeModulesForMinistry
+              modules={freeModules}
+              excluded={excluded}
+              loading={exclusionsQ.isLoading || modulesQ.isLoading}
+              error={exclusionsQ.isError ? errMsg(t, exclusionsQ.error) : null}
+              pending={exclusionM.isPending}
+              onToggle={(code, enabledForMinistry) => exclusionM.mutate({ code, enabledForMinistry })}
+              t={t}
+            />
+          )}
+
+          {ministryId && (
+            <div style={{ padding: "12px 16px 0" }}>
+              <h4 style={{ margin: "0 0 2px" }}>{t("subscriptions.agreementsTitle")}</h4>
+              <p className="section-sub" style={{ margin: 0 }}>{t("subscriptions.agreementsHint")}</p>
+            </div>
+          )}
 
           {!ministryId ? (
             <div style={{ padding: 40, textAlign: "center", color: "var(--ink-500)" }}>{t("subscriptions.pickMinistryHint")}</div>
@@ -331,7 +377,14 @@ export default function AbonnementsPage() {
                       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                         <Badge tone={statusTone(s.effectiveStatus)} dot>{s.effectiveStatus}</Badge>
                         <span style={{ fontWeight: 500 }}>{s.moduleCodes.map(moduleName).join(", ")}</span>
+                        {s.cmci && <Badge tone="green">{t("subscriptions.cmciBadge")}</Badge>}
                       </div>
+                      {/* §3.7 + P-06 (JP 27/10) — accord HIERARCHIE_SUIVI enregistré mais sans effet : on le dit. */}
+                      {s.moduleCodes.includes(MINISTRY_ONLY_CODE) && grants(s) && !accordGrantsModule(s, MINISTRY_ONLY_CODE) && (
+                        <div style={{ fontSize: 13, color: "var(--warn)" }}>
+                          {t("subscriptions.cmciInert", { module: moduleName(MINISTRY_ONLY_CODE) })}
+                        </div>
+                      )}
                       <div style={{ fontSize: 13, color: "var(--ink-500)" }}>
                         {fmtDate(s.startDate, dateLocale)} → {s.endDate ? fmtDate(s.endDate, dateLocale) : "∞"}
                         {s.priceAmount != null ? ` · ${s.priceAmount} ${s.priceCurrency} ${s.billingPeriod === "MONTHLY" ? t("subscriptions.perMonth") : t("subscriptions.perYear")}` : ""}
@@ -407,10 +460,7 @@ export default function AbonnementsPage() {
         footer={
           <>
             <Button variant="ghost" onClick={() => setActivateNode(null)}>{t("common.cancel")}</Button>
-            <Button variant="secondary" onClick={() => quoteM.mutate()} disabled={!canQuote || quoteM.isPending}>
-              {quoteM.isPending ? t("subscriptions.calculating") : t("subscriptions.calculateQuote")}
-            </Button>
-            <Button variant="primary" onClick={() => createM.mutate()} disabled={!canQuote || createM.isPending}>
+            <Button variant="primary" onClick={() => createM.mutate()} disabled={!canCreate || createM.isPending}>
               {createM.isPending ? t("subscriptions.creating") : t("subscriptions.createButton")}
             </Button>
           </>
@@ -425,10 +475,18 @@ export default function AbonnementsPage() {
                   const direct = moduleAlreadyDirect(m.code);
                   const inherited = activateCov?.inherited.has(m.code);
                   const checked = form.modules.includes(m.code);
+                  // §3.7 + P-06 (JP 27/10) — un accord n'ouvre HIERARCHIE_SUIVI (droit de CHAÎNE) qu'à la portée
+                  // MINISTÈRE et s'il est marqué « Accord CMCI » : un accord géographique (nation, région, ville,
+                  // assemblée) n'ouvre pas un droit de chaîne. Filtre d'affichage ; le serveur reste juge.
+                  const ministryOnly = m.code === MINISTRY_ONLY_CODE && activateNode.level !== "MINISTRY";
+                  const needsCmci = m.code === MINISTRY_ONLY_CODE && activateNode.level === "MINISTRY" && !form.cmci;
+                  const locked = direct || ministryOnly || needsCmci;
                   return (
-                    <label key={m.code} style={{ display: "flex", alignItems: "center", gap: 8, cursor: direct ? "not-allowed" : "pointer", opacity: direct ? 0.5 : 1 }}>
-                      <Checkbox checked={checked} onChange={(v) => { if (direct) return; setForm({ ...form, modules: v ? [...form.modules, m.code] : form.modules.filter((c) => c !== m.code) }); }} />
+                    <label key={m.code} style={{ display: "flex", alignItems: "center", gap: 8, cursor: locked ? "not-allowed" : "pointer", opacity: locked ? 0.5 : 1 }}>
+                      <Checkbox checked={checked} onChange={(v) => { if (locked) return; setForm({ ...form, modules: v ? [...form.modules, m.code] : form.modules.filter((c) => c !== m.code) }); }} />
                       <span>{m.name} <span style={{ color: "var(--ink-400)" }}>({m.code})</span></span>
+                      {ministryOnly && <Badge tone="gray">{t("subscriptions.ministryOnly")}</Badge>}
+                      {needsCmci && <Badge tone="gray">{t("subscriptions.cmciRequired")}</Badge>}
                       {direct && <Badge tone="ok">{t("subscriptions.alreadyActiveHere")}</Badge>}
                       {!direct && inherited && <Badge tone="earth">{t("subscriptions.coveredByInheritance")}</Badge>}
                     </label>
@@ -437,43 +495,30 @@ export default function AbonnementsPage() {
               </div>
             </Field>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-              <Field label={t("subscriptions.pricingZoneLabel")}>
-                <Select value={form.zone} onChange={(e) => setForm({ ...form, zone: e.target.value as PricingZone })}>
-                  {ZONES.map((z) => <option key={z} value={z}>{z}</option>)}
-                </Select>
+            {/* §3.7 + P-06 (JP 27/10) — « Accord CMCI », au niveau du ministère seulement. Décocher retire HIERARCHIE_SUIVI. */}
+            {activateNode.level === "MINISTRY" && (
+              <Field label={t("subscriptions.cmciLabel")} hint={t("subscriptions.cmciHint", { module: moduleName(MINISTRY_ONLY_CODE) })}>
+                <Toggle
+                  checked={form.cmci}
+                  onChange={(v) => setForm({ ...form, cmci: v, modules: v ? form.modules : form.modules.filter((c) => c !== MINISTRY_ONLY_CODE) })}
+                  label={t("subscriptions.cmciToggle")}
+                />
               </Field>
+            )}
+
+            {/* O12 (JP 27/10) — prix d'un accord : information saisie à la main (aucune grille ni devis). */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
               <Field label={t("subscriptions.billingPeriodLabel")}>
                 <Select value={form.billingPeriod} onChange={(e) => setForm({ ...form, billingPeriod: e.target.value as BillingPeriod })}>
                   <option value="ANNUAL">{t("subscriptions.annual")}</option>
                   <option value="MONTHLY">{t("subscriptions.monthly")}</option>
                 </Select>
               </Field>
-              <Field label={t("subscriptions.cmciDiscountLabel")}>
-                <Toggle checked={form.cmci} onChange={(v) => setForm({ ...form, cmci: v })} label={form.cmci ? t("common.yes") : t("common.no")} />
-              </Field>
-            </div>
-
-            {quote && (
-              <div className="card" style={{ background: "var(--parchment, #faf7f0)" }}>
-                <div style={{ marginBottom: 6 }}>
-                  <strong>{t("subscriptions.quoteWord")}</strong> — {t("subscriptions.quoteMembers", { count: quote.memberCount })} <Badge tone="earth">{quote.tier}</Badge>
-                </div>
-                {quote.lines.map((l) => (
-                  <div key={l.moduleCode} style={{ display: "flex", justifyContent: "space-between", fontSize: 14, padding: "2px 0" }}>
-                    <span>{l.moduleCode}{l.cmciApplied ? " · CMCI" : ""}{l.cumulApplied ? " · cumul" : ""}</span>
-                    <span>{l.onQuote ? t("subscriptions.onQuote") : `${l.finalAmount} ${l.currency} ${l.billingPeriod === "MONTHLY" ? t("subscriptions.perMonth") : t("subscriptions.perYear")}`}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-              <Field label={t("subscriptions.priceLabel")}><Input type="number" value={form.priceAmount} onChange={(e) => setForm({ ...form, priceAmount: e.target.value })} /></Field>
+              <Field label={t("subscriptions.priceLabel")} hint={t("subscriptions.priceInfoHint")}><Input type="number" value={form.priceAmount} onChange={(e) => setForm({ ...form, priceAmount: e.target.value })} /></Field>
               <Field label={t("subscriptions.currencyLabel")}><Input value={form.priceCurrency} onChange={(e) => setForm({ ...form, priceCurrency: e.target.value.toUpperCase().slice(0, 3) })} /></Field>
-              <Field label={t("subscriptions.startLabel")}><Input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} /></Field>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+              <Field label={t("subscriptions.startLabel")}><Input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} /></Field>
               <Field label={t("subscriptions.endLabel")}><Input type="date" value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })} /></Field>
               <Field label={t("subscriptions.noteLabel")}><Input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
             </div>
@@ -484,6 +529,55 @@ export default function AbonnementsPage() {
   );
 }
 
+// ---- Modules gratuits pour un ministère (D-OFF-01, JP 27/10) ----
+function FreeModulesForMinistry({
+  modules, excluded, loading, error, pending, onToggle, t,
+}: {
+  modules: ModuleResponse[];
+  excluded: Set<string>;
+  loading: boolean;
+  error: string | null;
+  pending: boolean;
+  /** `enabledForMinistry` = état VOULU (vrai → supprimer l'exclusion, faux → la créer). */
+  onToggle: (code: string, enabledForMinistry: boolean) => void;
+  t: TFunction;
+}) {
+  return (
+    <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--line,#eee)" }}>
+      <h4 style={{ margin: "0 0 2px" }}>{t("subscriptions.exclusions.title")}</h4>
+      <p className="section-sub" style={{ margin: "0 0 8px" }}>{t("subscriptions.exclusions.intro")}</p>
+      {loading ? (
+        <div style={{ color: "var(--ink-500)" }}>{t("common.loading")}</div>
+      ) : error ? (
+        <div style={{ color: "var(--ink-500)" }}>{error}</div>
+      ) : modules.length === 0 ? (
+        <div style={{ color: "var(--ink-500)" }}>{t("subscriptions.exclusions.none")}</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column" }}>
+          {modules.map((m) => {
+            const on = !excluded.has(m.code);
+            // Un module coupé pour toute la plateforme (`enabled = false`) l'est aussi pour ce ministère :
+            // l'exclusion reste réglable mais sans effet tant que l'interrupteur global est coupé.
+            return (
+              <div key={m.code} style={{ display: "flex", alignItems: "center", gap: 12, justifyContent: "space-between", padding: "6px 0", flexWrap: "wrap" }}>
+                <div>
+                  <span style={{ fontWeight: 500 }}>{m.name}</span>{" "}
+                  <span style={{ color: "var(--ink-400)", fontSize: 12.5 }}>({m.code})</span>{" "}
+                  {!on && <Badge tone="warn">{t("subscriptions.exclusions.excludedBadge")}</Badge>}{" "}
+                  {!m.enabled && <Badge tone="gray">{t("subscriptions.exclusions.platformOff")}</Badge>}
+                </div>
+                <span style={{ opacity: pending ? 0.5 : 1, pointerEvents: pending ? "none" : undefined }}>
+                  <Toggle checked={on} onChange={(v) => onToggle(m.code, v)} label={t("subscriptions.exclusions.toggle")} />
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---- Légende ----
 function Legend({ t }: { t: (k: string) => string }) {
   return (
@@ -491,14 +585,15 @@ function Legend({ t }: { t: (k: string) => string }) {
       <Badge tone="green">{t("subscriptions.stateActive")}</Badge>
       <Badge tone="earth">{t("subscriptions.stateInherited")}</Badge>
       <Badge tone="warn">{t("subscriptions.stateSuspended")}</Badge>
+      <Badge tone="gray">{t("subscriptions.stateInert")}</Badge>
     </div>
   );
 }
 
 // ---- Ligne d'arbre (récursive) ----
 function ModuleBadges({ codes, cov, moduleName }: { codes: string[]; cov: NodeCov | undefined; moduleName: (c: string) => string }) {
-  const toneByState: Record<Exclude<ModuleState, "none">, "green" | "earth" | "warn"> = {
-    active: "green", inherited: "earth", suspended: "warn",
+  const toneByState: Record<Exclude<ModuleState, "none">, "green" | "earth" | "warn" | "gray"> = {
+    active: "green", inherited: "earth", inert: "gray", suspended: "warn",
   };
   const shown = codes
     .map((code) => ({ code, st: moduleState(cov, code) }))

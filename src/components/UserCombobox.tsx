@@ -138,7 +138,7 @@ export function UserCombobox({
  * de membres. Sans saisie, elle propose les derniers inscrits.
  */
 export function RemoteUserCombobox({
-  ministryId, value, selected, onChange, t, excludeId, excludeIds, label, hint, emptyOptionLabel,
+  ministryId, value, selected, onChange, t, excludeId, excludeIds, label, hint, emptyOptionLabel, filter,
 }: {
   /** Vide = tous les ministères. */
   ministryId?: string;
@@ -153,6 +153,8 @@ export function RemoteUserCombobox({
   label: string;
   hint?: string;
   emptyOptionLabel?: string;
+  /** Filtre local des résultats d'une page (ex. dirigeants seuls) ; le serveur ne le connaît pas. */
+  filter?: (u: AdminUserResponse) => boolean;
 }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -165,7 +167,7 @@ export function RemoteUserCombobox({
   });
 
   const excluded = new Set([...(excludeIds ?? []), ...(excludeId ? [excludeId] : [])]);
-  const matches = (q.data?.content ?? []).filter((u) => !excluded.has(u.id));
+  const matches = (q.data?.content ?? []).filter((u) => !excluded.has(u.id) && (!filter || filter(u)));
   const total = q.data?.totalElements ?? 0;
 
   return (

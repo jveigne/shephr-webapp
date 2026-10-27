@@ -14,6 +14,8 @@ const NAV: NavSection[] = [
       { id: "ministeres", labelKey: "nav.ministries", icon: "Building", path: "/ministeres" },
       { id: "structure", labelKey: "nav.structure", icon: "Hierarchy", path: "/structure" },
       { id: "demandes", labelKey: "nav.requests", icon: "Inbox", path: "/demandes" },
+      // D-HIE-08 (JP 28/10) — historique des demandes de supervision (chaîne), lecture seule, à côté des Demandes.
+      { id: "supervision", labelKey: "nav.supervision", icon: "Hierarchy", path: "/supervision" },
       { id: "utilisateurs", labelKey: "nav.users", icon: "Users", path: "/utilisateurs" },
     ],
   },

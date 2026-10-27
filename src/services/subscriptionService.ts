@@ -31,8 +31,15 @@ export function updateModule(
 // ---- Subscriptions — mirrors subscription/admin/subscription/dto ----
 export type SubscriptionScope = "MINISTRY" | "COUNTRY" | "ZONE" | "LOCALITY" | "UNIT";
 export type SubscriptionStatus = "ACTIVE" | "SUSPENDED" | "EXPIRED";
-export type SubscriptionTier = "P1" | "P2" | "P3" | "P4";
-export type PricingZone = "A" | "B" | "C" | "D";
+// P-11 / O12 (JP 27/10, lot « Offres Caleb / Néhémie ») — l'ancienne tarification par zone A–D
+// (`PricingZone`, palier `SubscriptionTier`, remise CMCI, devis `/admin/pricing/quote`) est retirée :
+// une couverture `sub_subscription` est désormais un ACCORD (ex. ETUDE_SUIVI au niveau ministère /
+// nation / région, D-ABO-28), sans grille de prix. Les colonnes `tier` / `pricing_zone` restent en base
+// (pas de DROP) ; elles ne sont plus ni lues ni écrites ici.
+// §3.7 + P-06 (JP 27/10) — `cmci` n'est PLUS une remise : c'est le marqueur « accord CMCI » qui seul permet à
+// un accord d'ouvrir HIERARCHIE_SUIVI (droit de CHAÎNE, Caleb) — et seulement à la portée MINISTRY
+// (`Subscription#grantsModule` : `scope == MINISTRY && cmci`). Un accord HIERARCHIE_SUIVI sans `cmci` ou
+// hors ministère est enregistré mais n'ouvre RIEN. Voir `accordGrantsModule`.
 export type BillingPeriod = "MONTHLY" | "ANNUAL";
 
 export interface SubscriptionResponse {
@@ -43,9 +50,9 @@ export interface SubscriptionResponse {
   scopeEntityId: string;
   status: SubscriptionStatus;
   effectiveStatus: SubscriptionStatus;
-  tier: SubscriptionTier | null;
-  pricingZone: PricingZone | null;
+  /** Accord CMCI (`is_cmci`) — §3.7 / P-06 (JP 27/10) : seule condition, avec la portée MINISTRY, pour ouvrir HIERARCHIE_SUIVI. */
   cmci: boolean;
+  /** Prix d'un accord, informatif (aucune grille, aucun calcul). */
   priceAmount: number | null;
   priceCurrency: string | null;
   billingPeriod: BillingPeriod | null;
@@ -61,8 +68,7 @@ export interface CreateSubscriptionRequest {
   ministryId: string;
   scope: SubscriptionScope;
   scopeEntityId: string;
-  tier?: SubscriptionTier | null;
-  pricingZone?: PricingZone | null;
+  /** Accord CMCI — §3.7 / P-06 (JP 27/10). Primitif côté Java : absent = false. */
   cmci: boolean;
   priceAmount?: number | null;
   priceCurrency?: string | null;
@@ -70,6 +76,20 @@ export interface CreateSubscriptionRequest {
   startDate?: string | null;
   endDate?: string | null;
   notes?: string | null;
+}
+
+/** Code de droit de CHAÎNE (Caleb) — miroir de `Subscription.HIERARCHIE_SUIVI`. */
+export const HIERARCHIE_SUIVI = "HIERARCHIE_SUIVI";
+
+/**
+ * Miroir de `com.excellence.back.subscription.Subscription#grantsModule` (§3.7 + P-06, JP 27/10) : un accord ouvre
+ * `code` s'il est effectivement actif et le porte ; pour HIERARCHIE_SUIVI, en plus, seulement à la portée MINISTRY
+ * et si c'est un accord CMCI. Affichage seulement : le serveur reste juge.
+ */
+export function accordGrantsModule(s: SubscriptionResponse, code: string): boolean {
+  if (s.effectiveStatus !== "ACTIVE" || !s.moduleCodes.includes(code)) return false;
+  if (code === HIERARCHIE_SUIVI) return s.scope === "MINISTRY" && s.cmci;
+  return true;
 }
 
 export function listSubscriptions(params?: {
@@ -107,37 +127,45 @@ export function reactivateSubscription(
   });
 }
 
-// ---- Pricing (devis) — mirrors subscription/pricing/dto ----
-export interface ModulePriceLine {
+// ---- Exclusions de modules gratuits par ministère — D-OFF-01 (JP 27/10, lot « Offres Caleb / Néhémie ») ----
+// `ASSEMBLY`, `EVENTS`, `DOCUMENTS`, `MEMBER_CARE` deviennent gratuits et OUVERTS PAR DÉFAUT à tous les
+// ministères ; le SUPER_ADMIN peut DÉSACTIVER un module gratuit pour un ministère donné (option C) : une
+// ligne `sub_module_exclusion (ministry_id, module_code)`. L'interrupteur global `sub_module.enabled` reste
+// (il coupe pour tous). Exclure un module PAYANT → 422 `MODULE_EXCLUSION_NOT_FREE`.
+// Plan : cmfipraise-backend docs/shephr/27_10_2026/05_Plan_Offres_Caleb_Nehemie.md §3.1, §4.
+
+// Mirrors com.excellence.back.subscription.admin.module.dto.ModuleExclusionDtos.ModuleExclusion
+export interface ModuleExclusion {
+  ministryId: string;
   moduleCode: string;
-  baseAmount: number | null;
-  currency: string | null;
-  billingPeriod: BillingPeriod | null;
-  cmciApplied: boolean;
-  cumulApplied: boolean;
-  finalAmount: number | null;
-  onQuote: boolean;
+  createdAt: string;
 }
 
-export interface PricingQuoteResponse {
-  memberCount: number;
-  tier: SubscriptionTier;
-  zone: PricingZone;
-  cmci: boolean;
-  lines: ModulePriceLine[];
+// Mirrors com.excellence.back.subscription.admin.module.dto.ModuleExclusionDtos.ModuleExclusionRequest
+export interface ModuleExclusionRequest {
+  ministryId: string;
+  moduleCode: string;
 }
 
-export function pricingQuote(req: {
-  scope: SubscriptionScope;
-  scopeEntityId: string;
-  moduleCodes: string[];
-  zone: PricingZone;
-  cmci: boolean;
-}): Promise<PricingQuoteResponse> {
-  return apiFetch<PricingQuoteResponse>("/admin/pricing/quote", {
-    method: "POST",
-    body: JSON.stringify(req),
+/** Exclusions d'un ministère (module gratuit DÉSACTIVÉ pour lui). */
+export function listModuleExclusions(ministryId: string): Promise<ModuleExclusion[]> {
+  return apiFetch<ModuleExclusion[]>(`/admin/modules/exclusions?ministryId=${encodeURIComponent(ministryId)}`);
+}
+
+/** Désactive un module gratuit pour un ministère (crée l'exclusion ; idempotent). */
+export function createModuleExclusion(ministryId: string, moduleCode: string): Promise<ModuleExclusion> {
+  return apiFetch<ModuleExclusion>("/admin/modules/exclusions", {
+    method: "PUT",
+    body: JSON.stringify({ ministryId, moduleCode } satisfies ModuleExclusionRequest),
   });
+}
+
+/** Réactive un module gratuit pour un ministère (supprime l'exclusion). */
+export function deleteModuleExclusion(ministryId: string, moduleCode: string): Promise<void> {
+  return apiFetch<void>(
+    `/admin/modules/exclusions?ministryId=${encodeURIComponent(ministryId)}&moduleCode=${encodeURIComponent(moduleCode)}`,
+    { method: "DELETE" },
+  );
 }
 
 // ---- Org entities (pickers) ----

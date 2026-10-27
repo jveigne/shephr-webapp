@@ -4,23 +4,28 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { Icons } from "@/components/icons";
-import { Badge, Button, Drawer, Field, IconButton, Input, Modal, Pagination, Select, Table, TopBar } from "@/components/primitives";
+import { Badge, Button, Checkbox, Drawer, Field, IconButton, Input, Modal, Pagination, Select, Table, TopBar } from "@/components/primitives";
 import { RemoteUserCombobox } from "@/components/UserCombobox";
 import { useToasts } from "@/context/ToastContext";
 import { useDebounced } from "@/hooks/useDebounced";
 import { apiErrorCode, saveBlob } from "@/services/api";
 import { listMinistries } from "@/services/ministryService";
+import { listLocalities, listModules } from "@/services/subscriptionService";
 import {
   activateOffer,
   archiveOffer,
   cancelBillingSubscription,
+  createManualSubscription,
   createOffer,
   createPromoCode,
+  createVoucherBatch,
   deletePromoCode,
   disablePromoCode,
   downloadInvoicePdf,
   enablePromoCode,
   exportInvoicesCsv,
+  exportVoucherCodesCsv,
+  formatVoucherCode,
   getBillingOverview,
   getBillingSubscription,
   listBillingSubscriptions,
@@ -28,28 +33,100 @@ import {
   listOffers,
   listPromoCodes,
   listPromoCodeSubscriptions,
+  listVoucherBatches,
+  listVoucherCodes,
   patchBillingSubscription,
   resendInvoice,
+  revokeVoucher,
   updateOffer,
   updatePromoCode,
   type AdminInvoice,
   type AdminOffer,
+  type AdminPlanCount,
   type AdminPromoCode,
   type AdminSubscription,
   type AdminSubscriptionPatch,
   type BillingAddress,
+  type BillingPeriod,
+  type BillingSource,
   type BillingSubscriptionStatus,
+  type ManualSubscriptionRequest,
   type OfferRequest,
+  type PlanScope,
   type PromoCodeStatus,
+  type VoucherBatch,
+  type VoucherCode,
+  type VoucherStatus,
 } from "@/services/billingService";
+import type { AdminUserResponse, ModuleRole } from "@/services/userService";
 
 // D-ABO-15 (JP 23/10) — page « Facturation » du back-office : abonnements PAYANTS, factures,
 // offres, codes promo, export. La page /abonnements garde son rôle (accès aux modules) :
 // D-ABO-01, rien ici n'active ni ne coupe un module.
+// D-ABO-16..20 (JP 27/10, lot pro-plan PP-O1) — EXCEPTION : les offres à PLAN (`planCode`, ex.
+// EGLISE_VILLE) ouvrent leurs codes de droit à une VILLE tant que l'abonnement ouvre droit (`entitled`,
+// calculé par le serveur). Activation manuelle d'une ville (source MANUEL, RG-ABO-29), prolongation,
+// fin ; la couverture /abonnements (sub_subscription) n'est ni lue ni écrite ici (D-ABO-17).
+// D-ABO-31.. (JP 27/10, « Suivi de ma hiérarchie ») — un plan a une PORTÉE : Ville (`LOCALITY`) ou
+// Dirigeant (`USER`, personnelle : le bénéficiaire est le payeur, axe CHAÎNE de leadership). Choisie à la
+// création de l'offre, immuable ; l'activation manuelle d'un plan USER désigne un dirigeant, pas une ville.
+// D-OFF-08 (JP 27/10, lot « Offres Caleb / Néhémie ») — onglet « Vouchers » : lots de codes liés à un ministère,
+// pour une offre à formule (Caleb ou Néhémie), d'une durée en jours fixée ici ; un code saisi sur le web crée ou
+// prolonge un abonnement `source = VOUCHER` (droits d'un MANUEL, aucune facture). Champ « prix local »
+// (`localPriceLabel`, information seulement) dans le formulaire des offres.
+// D-OFF-10.. / §3.8 (JP 27/10) — libellés commerciaux « Offre Caleb » (DIRIGEANT_HIERARCHIE) et « Offre Néhémie »
+// (EGLISE_VILLE) : le nom vient du serveur (`bil_offer.name`), le sous-titre de `billing.planNames.*`.
 
-type Tab = "overview" | "subscriptions" | "invoices" | "offers" | "promo";
+type Tab = "overview" | "subscriptions" | "invoices" | "offers" | "promo" | "vouchers";
 const PAGE_SIZE = 25;
 const SUB_STATUSES: BillingSubscriptionStatus[] = ["PENDING", "ACTIVE", "PAST_DUE", "CANCELED", "EXPIRED"];
+const SOURCES: BillingSource[] = ["STRIPE", "MANUEL", "VOUCHER"];
+/** D-OFF-08 (JP 27/10) — quantité maximale d'un lot de vouchers. */
+const VOUCHER_MAX_QUANTITY = 500;
+/** = `BillingVoucherBatch.MAX_DURATION_DAYS` (CHECK duration_days BETWEEN 1 AND 3660). */
+const VOUCHER_MAX_DURATION_DAYS = 3660;
+const VOUCHER_STATUSES: VoucherStatus[] = ["ACTIVE", "USED", "REVOKED"];
+/** D-ABO-20 / RG-ABO-31 (JP 27/10) — délai de grâce d'un plan en PAST_DUE, depuis `pastDueSince`. */
+const GRACE_DAYS = 14;
+/** §6 — filtre `planCode=NONE` = offres sans plan. */
+const PLAN_NONE = "NONE";
+const PLAN_SCOPES: PlanScope[] = ["LOCALITY", "USER"];
+/**
+ * D-ABO-31 (JP 27/10) — portée d'une offre ; un plan sans `planScope` (serveur antérieur à la portée) est une
+ * ville, seule portée d'alors.
+ */
+function offerScope(o: Pick<AdminOffer, "planCode" | "planScope">): PlanScope | null {
+  if (!o.planCode) return null;
+  return o.planScope ?? "LOCALITY";
+}
+/**
+ * §3.8 (JP 27/10) — sous-titre commercial d'un plan connu (« Le suivi de ma hiérarchie » / « Le suivi de toute ma
+ * ville ») ; null pour un autre code (le code technique reste affiché à côté).
+ */
+function planSubtitle(t: TFunction, planCode: string | null | undefined): string | null {
+  if (!planCode) return null;
+  const key = `billing.planNames.${planCode}`;
+  const tr = t(key);
+  return tr === key ? null : tr;
+}
+/** D-ABO-31 — portée d'un abonnement : bénéficiaire personnel → USER, sinon la portée de son offre. */
+function subScope(s: Pick<AdminSubscription, "planCode" | "beneficiaryUserId" | "localityId">, offers: AdminOffer[]): PlanScope | null {
+  if (!s.planCode) return null;
+  if (s.beneficiaryUserId) return "USER";
+  if (s.localityId) return "LOCALITY";
+  const o = offers.find((x) => x.planCode === s.planCode);
+  return o ? offerScope(o) : "LOCALITY";
+}
+/**
+ * D-ABO-31 (JP 27/10) — seul un DIRIGEANT (rang manager ≥ DIRIGEANT_UNITE, rôle Objectifs ou Dons) peut
+ * porter un plan USER ; LEADER / SECRETARIAT / superAdmin non (même règle que `canSubscribePersonal`).
+ * Filtre d'AFFICHAGE du sélecteur : le serveur reste juge (403 / 422).
+ */
+const MANAGER_ROLES: ModuleRole[] = ["DIRIGEANT_UNITE", "DIRIGEANT", "DIRIGEANT_SENIOR", "DIRIGEANT_COORDINATEUR"];
+function isManagerAccount(u: AdminUserResponse): boolean {
+  if (u.superAdmin) return false;
+  return (!!u.goalRole && MANAGER_ROLES.includes(u.goalRole)) || (!!u.donationRole && MANAGER_ROLES.includes(u.donationRole));
+}
 
 // ---------- Formatage (§6.4 : montants formatés côté client, l'API ne renvoie que des centimes) ----------
 
@@ -77,6 +154,44 @@ function fmtDateTime(iso: string | null | undefined, locale: string): string {
   if (!iso) return "—";
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString(locale, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+/**
+ * `LocalDate` (`YYYY-MM-DD`, ex. `manualEndDate`) → date affichée, SANS passer par l'UTC
+ * (un `new Date("2027-01-31")` reculerait d'un jour à l'ouest de Greenwich).
+ */
+function fmtDay(ymd: string | null | undefined, locale: string): string {
+  if (!ymd) return "—";
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+  if (!m) return "—";
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).toLocaleDateString(locale, { day: "numeric", month: "short", year: "numeric" });
+}
+
+/** §1 — « aujourd'hui » au fuseau métier Europe/Paris, en `YYYY-MM-DD` (borne basse d'une date de fin manuelle). */
+function todayParis(): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Paris", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+}
+
+/**
+ * D-OFF-08 (JP 27/10) — un VOUCHER suit les règles d'un MANUEL (droit jusqu'à `manualEndDate` incluse, ni Stripe
+ * ni facture) : « hors Stripe » = MANUEL ou VOUCHER.
+ */
+function isOffStripe(source: BillingSource): boolean {
+  return source === "MANUEL" || source === "VOUCHER";
+}
+
+/** Échéance affichée : `manualEndDate` pour un MANUEL / VOUCHER, sinon `currentPeriodEnd`. */
+function dueLabel(s: Pick<AdminSubscription, "source" | "manualEndDate" | "currentPeriodEnd">, locale: string): string {
+  return isOffStripe(s.source) ? fmtDay(s.manualEndDate, locale) : fmtDate(s.currentPeriodEnd, locale);
+}
+
+/** D-ABO-20 — fin de la grâce d'un plan impayé (`pastDueSince` + 14 j), pour information. */
+function graceEnd(pastDueSince: string | null): string | null {
+  if (!pastDueSince) return null;
+  const d = new Date(pastDueSince);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setUTCDate(d.getUTCDate() + GRACE_DAYS);
+  return d.toISOString();
 }
 
 /** « 99,99 » / « 99.99 » → 9999 ; NaN si illisible. */
@@ -143,6 +258,24 @@ function SubStatusBadge({ s }: { s: Pick<AdminSubscription, "status" | "cancelAt
   );
 }
 
+/** D-ABO-20 — « Droit ouvert » n'a de sens que pour un plan (une offre sans plan n'ouvre jamais rien). */
+function EntitledBadge({ s }: { s: Pick<AdminSubscription, "planCode" | "entitled"> }) {
+  const { t } = useTranslation();
+  if (!s.planCode) return <span style={{ color: "var(--ink-400)" }}>—</span>;
+  return <Badge tone={s.entitled ? "ok" : "gray"} dot>{s.entitled ? t("billing.subs.entitledYes") : t("billing.subs.entitledNo")}</Badge>;
+}
+
+function ScopeBadge({ scope }: { scope: PlanScope | null }) {
+  const { t } = useTranslation();
+  if (!scope) return <span style={{ color: "var(--ink-400)" }}>—</span>;
+  return <Badge tone={scope === "USER" ? "earth" : "green"}>{t(`billing.scope.${scope}`)}</Badge>;
+}
+
+function SourceBadge({ source }: { source: BillingSource }) {
+  const { t } = useTranslation();
+  return <Badge tone={source === "MANUEL" ? "earth" : source === "VOUCHER" ? "green" : "gray"}>{t(`billing.source.${source}`)}</Badge>;
+}
+
 function useDownload() {
   const { t } = useTranslation();
   const { push } = useToasts();
@@ -170,6 +303,7 @@ export default function FacturationPage() {
     { id: "invoices", label: t("billing.tabs.invoices") },
     { id: "offers", label: t("billing.tabs.offers") },
     { id: "promo", label: t("billing.tabs.promo") },
+    { id: "vouchers", label: t("billing.tabs.vouchers") },
   ];
 
   return (
@@ -191,6 +325,7 @@ export default function FacturationPage() {
         {tab === "invoices" && <InvoicesTab />}
         {tab === "offers" && <OffersTab />}
         {tab === "promo" && <PromoTab />}
+        {tab === "vouchers" && <VouchersTab />}
       </div>
     </>
   );
@@ -202,6 +337,9 @@ function OverviewTab({ onOpenReference }: { onOpenReference: (ref: string) => vo
   const { t } = useTranslation();
   const locale = useLocale();
   const q = useQuery({ queryKey: ["billing", "overview"], queryFn: getBillingOverview });
+  const offersQ = useQuery({ queryKey: ["billing", "offers"], queryFn: listOffers });
+  const planName = (code: string) => (offersQ.data ?? []).find((o) => o.planCode === code)?.name ?? code;
+  const planOffer = (code: string) => (offersQ.data ?? []).find((o) => o.planCode === code);
 
   if (q.isLoading) return <div style={{ color: "var(--ink-500)" }}>{t("common.loading")}</div>;
   if (q.isError || !q.data) return <div style={{ color: "var(--ink-500)" }}>{errMsg(t, q.error)}</div>;
@@ -225,8 +363,41 @@ function OverviewTab({ onOpenReference }: { onOpenReference: (ref: string) => vo
           </div>
         ))}
       </div>
+      {/* Revue PP-O1 (27/10) — le serveur additionne `priceCents` de tout abonnement ACTIVE / PAST_DUE, MANUEL
+          compris et ANNUAL non ramené au mois : la tuile dit ce qu'elle compte (correctif serveur à trancher). */}
+      <div style={{ color: "var(--ink-500)", fontSize: 12.5 }}>{t("billing.overview.mrrHint")}</div>
       <div style={{ color: "var(--ink-500)", fontSize: 13.5 }}>
         {t("billing.overview.canceledThisMonth", { count: o.canceledThisMonth })}
+      </div>
+      {/* D-ABO-20 (JP 27/10) — villes dont l'abonnement de plan ouvre droit maintenant, par source. */}
+      <div className="card">
+        <h3 style={{ margin: "0 0 4px" }}>{t("billing.overview.plansTitle")}</h3>
+        <p className="section-sub" style={{ marginTop: 0 }}>{t("billing.overview.plansHint")}</p>
+        {(o.plans ?? []).length === 0 ? (
+          <p style={{ color: "var(--ink-500)", margin: 0 }}>{t("billing.overview.noPlans")}</p>
+        ) : (
+          <Table
+            rows={(o.plans ?? []).map((p) => ({ ...p, _key: p.planCode }))}
+            columns={[
+              {
+                label: t("billing.subs.plan"),
+                render: (p: AdminPlanCount) => (
+                  <div>
+                    <div style={{ fontWeight: 500 }}>{planName(p.planCode)}</div>
+                    {planSubtitle(t, p.planCode) && <div style={{ fontSize: 12.5, color: "var(--ink-500)" }}>{planSubtitle(t, p.planCode)}</div>}
+                    <code style={{ fontSize: 12 }}>{p.planCode}</code>
+                  </div>
+                ),
+              },
+              { label: t("billing.scope.label"), render: (p: AdminPlanCount) => { const of = planOffer(p.planCode); return <ScopeBadge scope={of ? offerScope(of) : null} />; } },
+              { label: t("billing.overview.citiesStripe"), render: (p: AdminPlanCount) => p.stripeEntitled },
+              { label: t("billing.overview.citiesManual"), render: (p: AdminPlanCount) => p.manualEntitled },
+              // D-OFF-08 (JP 27/10) — abonnements ouverts par un code voucher, comptés à part par le serveur.
+              { label: t("billing.overview.citiesVoucher"), render: (p: AdminPlanCount) => p.voucherEntitled ?? 0 },
+              { label: t("billing.overview.citiesTotal"), render: (p: AdminPlanCount) => <strong>{p.stripeEntitled + p.manualEntitled + (p.voucherEntitled ?? 0)}</strong> },
+            ]}
+          />
+        )}
       </div>
       <div className="card">
         <h3 style={{ margin: "0 0 10px" }}>{t("billing.overview.alerts")}</h3>
@@ -255,17 +426,36 @@ function SubscriptionsTab({ initialSearch }: { initialSearch: string }) {
   const locale = useLocale();
   const [status, setStatus] = useState<BillingSubscriptionStatus | "">("");
   const [ministryId, setMinistryId] = useState("");
+  // D-ABO-16 / D-ABO-20 (JP 27/10) — filtres Formule (plan), Source et Ville.
+  const [planCode, setPlanCode] = useState("");
+  const [source, setSource] = useState<BillingSource | "">("");
+  const [localityId, setLocalityId] = useState("");
+  // D-ABO-31 (JP 27/10) — filtre Portée (Ville / Dirigeant).
+  const [planScope, setPlanScope] = useState<PlanScope | "">("");
   const [search, setSearch] = useState(initialSearch);
   const [page, setPage] = useState(1);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [manualOpen, setManualOpen] = useState(false);
   const debounced = useDebounced(search);
 
-  useEffect(() => { setPage(1); }, [status, ministryId, debounced]);
+  useEffect(() => { setPage(1); }, [status, ministryId, planCode, source, localityId, planScope, debounced]);
+  // Une ville n'a de sens que pour la portée Ville.
+  useEffect(() => { if (planScope === "USER") setLocalityId(""); }, [planScope]);
+  useEffect(() => { setLocalityId(""); }, [ministryId]);
 
   const ministriesQ = useQuery({ queryKey: ["ministries"], queryFn: listMinistries });
+  const offersQ = useQuery({ queryKey: ["billing", "offers"], queryFn: listOffers });
+  const localitiesQ = useQuery({
+    queryKey: ["billing", "localities", ministryId],
+    queryFn: () => listLocalities(ministryId),
+    enabled: !!ministryId,
+  });
+  const planOffers = (offersQ.data ?? []).filter((o) => !!o.planCode);
   const listQ = useQuery({
-    queryKey: ["billing", "subscriptions", status, ministryId, debounced, page],
-    queryFn: () => listBillingSubscriptions({ status, ministryId, search: debounced, page: page - 1, size: PAGE_SIZE }),
+    queryKey: ["billing", "subscriptions", status, ministryId, planCode, source, localityId, planScope, debounced, page],
+    queryFn: () => listBillingSubscriptions({
+      status, ministryId, planCode, source, localityId, planScope, search: debounced, page: page - 1, size: PAGE_SIZE,
+    }),
   });
 
   const rows = (listQ.data?.content ?? []).map((s) => ({ ...s, _key: s.id }));
@@ -274,7 +464,7 @@ function SubscriptionsTab({ initialSearch }: { initialSearch: string }) {
 
   return (
     <div className="card" style={{ padding: 0 }}>
-      <div style={{ display: "flex", gap: 12, padding: "12px 16px", flexWrap: "wrap", borderBottom: "1px solid var(--line,#eee)" }}>
+      <div style={{ display: "flex", gap: 12, padding: "12px 16px", flexWrap: "wrap", alignItems: "flex-end", borderBottom: "1px solid var(--line,#eee)" }}>
         <Field label={t("billing.subs.search")}>
           <Input icon={<Icons.Search size={14} />} placeholder={t("billing.subs.searchPlaceholder")} value={search} onChange={(e) => setSearch(e.target.value)} />
         </Field>
@@ -284,12 +474,44 @@ function SubscriptionsTab({ initialSearch }: { initialSearch: string }) {
             {SUB_STATUSES.map((s) => <option key={s} value={s}>{t(`billing.status.${s}`)}</option>)}
           </Select>
         </Field>
+        <Field label={t("billing.subs.plan")}>
+          <Select value={planCode} onChange={(e) => setPlanCode(e.target.value)}>
+            <option value="">{t("billing.all")}</option>
+            {planOffers.map((o) => <option key={o.id} value={o.planCode!}>{o.name}</option>)}
+            <option value={PLAN_NONE}>{t("billing.subs.noPlan")}</option>
+          </Select>
+        </Field>
+        <Field label={t("billing.scope.label")}>
+          <Select value={planScope} onChange={(e) => setPlanScope(e.target.value as PlanScope | "")}>
+            <option value="">{t("billing.all")}</option>
+            {PLAN_SCOPES.map((x) => <option key={x} value={x}>{t(`billing.scope.${x}`)}</option>)}
+          </Select>
+        </Field>
+        <Field label={t("billing.subs.source")}>
+          <Select value={source} onChange={(e) => setSource(e.target.value as BillingSource | "")}>
+            <option value="">{t("billing.all")}</option>
+            {SOURCES.map((x) => <option key={x} value={x}>{t(`billing.source.${x}`)}</option>)}
+          </Select>
+        </Field>
         <Field label={t("billing.subs.ministry")}>
           <Select value={ministryId} onChange={(e) => setMinistryId(e.target.value)}>
             <option value="">{t("billing.allMinistries")}</option>
             {(ministriesQ.data ?? []).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
           </Select>
         </Field>
+        {ministryId && planScope !== "USER" && (
+          <Field label={t("billing.subs.city")}>
+            <Select value={localityId} onChange={(e) => setLocalityId(e.target.value)}>
+              <option value="">{t("billing.allCities")}</option>
+              {(localitiesQ.data ?? []).map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
+            </Select>
+          </Field>
+        )}
+        <div style={{ marginLeft: "auto", paddingBottom: 6 }}>
+          <Button variant="primary" size="sm" iconL={<Icons.Plus size={15} />} onClick={() => setManualOpen(true)}>
+            {t("billing.manual.open")}
+          </Button>
+        </div>
       </div>
       {listQ.isLoading ? (
         <div style={{ padding: 24, color: "var(--ink-500)" }}>{t("common.loading")}</div>
@@ -311,8 +533,35 @@ function SubscriptionsTab({ initialSearch }: { initialSearch: string }) {
                   </div>
                 ),
               },
-              { label: t("billing.subs.ministry"), render: (s: AdminSubscription) => s.ministryName ?? <span style={{ color: "var(--ink-400)" }}>{t("billing.subs.noMinistry")}</span> },
-              { label: t("billing.subs.offer"), render: (s: AdminSubscription) => s.offerName },
+              {
+                // D-ABO-31 (JP 27/10) — portée du plan (Ville / Dirigeant).
+                label: t("billing.scope.label"),
+                render: (s: AdminSubscription) => <ScopeBadge scope={subScope(s, offersQ.data ?? [])} />,
+              },
+              {
+                // D-ABO-19 — ville couverte par un plan LOCALITY ; D-ABO-31 — dirigeant d'un plan USER ;
+                // le ministère en sous-titre.
+                label: t("billing.subs.beneficiary"),
+                render: (s: AdminSubscription) => (
+                  <div>
+                    <div style={{ fontWeight: 500 }}>
+                      {subScope(s, offersQ.data ?? []) === "USER" ? (s.beneficiaryName ?? s.payerName ?? "—") : (s.localityName ?? "—")}
+                    </div>
+                    <div style={{ fontSize: 12.5, color: "var(--ink-500)" }}>{s.ministryName ?? t("billing.subs.noMinistry")}</div>
+                  </div>
+                ),
+              },
+              {
+                label: t("billing.subs.plan"),
+                render: (s: AdminSubscription) => (
+                  <div>
+                    <div>{s.offerName}</div>
+                    {s.planCode && <code style={{ fontSize: 12 }}>{s.planCode}</code>}
+                  </div>
+                ),
+              },
+              { label: t("billing.subs.source"), render: (s: AdminSubscription) => <SourceBadge source={s.source} /> },
+              { label: t("billing.subs.period"), render: (s: AdminSubscription) => t(`billing.period.${s.billingPeriod}`) },
               {
                 label: t("billing.subs.price"),
                 render: (s: AdminSubscription) => (
@@ -323,14 +572,199 @@ function SubscriptionsTab({ initialSearch }: { initialSearch: string }) {
                 ),
               },
               { label: t("billing.subs.status"), render: (s: AdminSubscription) => <SubStatusBadge s={s} /> },
-              { label: t("billing.subs.nextDue"), render: (s: AdminSubscription) => fmtDate(s.currentPeriodEnd, locale) },
+              { label: t("billing.subs.due"), render: (s: AdminSubscription) => dueLabel(s, locale) },
+              { label: t("billing.subs.entitled"), render: (s: AdminSubscription) => <EntitledBadge s={s} /> },
             ]}
           />
           {pageCount > 1 && <Pagination page={page} pageCount={pageCount} total={total} perPage={PAGE_SIZE} onPage={setPage} />}
         </>
       )}
       {openId && <SubscriptionDrawer id={openId} onClose={() => setOpenId(null)} />}
+      {manualOpen && (
+        <ManualActivationModal
+          planOffers={planOffers}
+          offersLoading={offersQ.isLoading}
+          offersError={offersQ.isError ? offersQ.error : null}
+          onClose={() => setManualOpen(false)}
+          onCreated={(s) => { setManualOpen(false); setOpenId(s.id); }}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * RG-ABO-29 (JP 27/10) — activation MANUELLE par le SUPER_ADMIN : formule → ministère → ville (plan LOCALITY)
+ * ou dirigeant (plan USER, D-ABO-31..) → période (informative) → date de fin (≥ aujourd'hui, Europe/Paris) →
+ * payeur facultatif (ville seulement) → notes. Source MANUEL, aucune facture (D-ABO-24). RG-ABO-30 : 422
+ * SUBSCRIPTION_ALREADY_ACTIVE si la ville / le dirigeant a déjà un abonnement non résilié pour ce plan.
+ * D-ABO-31 — plan USER : le dirigeant choisi EST le payeur (bénéficiaire), pas de ville (localityId interdit,
+ * 422 PERSONAL_PLAN_LOCALITY_FORBIDDEN), mensuel seulement ; la recherche ne propose que les dirigeants.
+ */
+function ManualActivationModal({
+  planOffers, offersLoading, offersError, onClose, onCreated,
+}: {
+  planOffers: AdminOffer[];
+  /** Revue PP-O1 — une liste d'offres en cours de chargement ou en erreur n'est pas « aucune formule ». */
+  offersLoading: boolean;
+  offersError: unknown;
+  onClose: () => void;
+  onCreated: (s: AdminSubscription) => void;
+}) {
+  const { t } = useTranslation();
+  const locale = useLocale();
+  const qc = useQueryClient();
+  const { push } = useToasts();
+  const today = todayParis();
+
+  const [ministryId, setMinistryId] = useState("");
+  const [localityId, setLocalityId] = useState("");
+  const [planCode, setPlanCode] = useState(planOffers.find((o) => o.active)?.planCode ?? planOffers[0]?.planCode ?? "");
+  const [period, setPeriod] = useState<BillingPeriod>("MONTHLY");
+  const [endDate, setEndDate] = useState("");
+  const [payerId, setPayerId] = useState("");
+  const [leaderId, setLeaderId] = useState("");
+  const [notes, setNotes] = useState("");
+
+  const ministriesQ = useQuery({ queryKey: ["ministries"], queryFn: listMinistries });
+  const plan = planOffers.find((o) => o.planCode === planCode);
+  const scope = plan ? offerScope(plan) : null;
+  const isUser = scope === "USER";
+  const localitiesQ = useQuery({
+    queryKey: ["billing", "localities", ministryId],
+    queryFn: () => listLocalities(ministryId),
+    enabled: !!ministryId && !isUser,
+  });
+
+  useEffect(() => { setLocalityId(""); setPayerId(""); setLeaderId(""); }, [ministryId]);
+  // Changer de portée vide le bénéficiaire de l'autre portée.
+  useEffect(() => { setLocalityId(""); setLeaderId(""); setPayerId(""); }, [scope]);
+  // Les offres peuvent arriver après l'ouverture : on choisit alors la première formule proposée.
+  useEffect(() => {
+    if (!planCode && planOffers.length > 0) setPlanCode(planOffers.find((o) => o.active)?.planCode ?? planOffers[0].planCode ?? "");
+  }, [planOffers, planCode]);
+  // L'annuel n'existe que si le plan a un prix annuel (D-ABO-18).
+  useEffect(() => { if (period === "ANNUAL" && !plan?.annualPriceCents) setPeriod("MONTHLY"); }, [plan, period]);
+
+  const beneficiaryOk = isUser ? !!leaderId : !!localityId;
+  const valid = beneficiaryOk && !!planCode && /^\d{4}-\d{2}-\d{2}$/.test(endDate) && endDate >= today && notes.length <= 2000;
+
+  const createM = useMutation({
+    mutationFn: () => {
+      const body: ManualSubscriptionRequest = isUser
+        // D-ABO-31 (JP 27/10) — plan USER : { offerCode, userId, manualEndDate, notes } ; jamais de ville.
+        ? {
+          offerCode: plan!.code, planCode, userId: leaderId, billingPeriod: "MONTHLY", manualEndDate: endDate,
+          notes: notes.trim() || null,
+        }
+        : {
+          localityId, planCode, billingPeriod: period, manualEndDate: endDate,
+          payerUserId: payerId || null, notes: notes.trim() || null,
+        };
+      return createManualSubscription(body);
+    },
+    onSuccess: (s) => {
+      qc.invalidateQueries({ queryKey: ["billing"] });
+      push({ kind: "ok", title: t("billing.manual.createdToast"), msg: s.reference });
+      onCreated(s);
+    },
+    onError: (e) => push({ kind: "error", title: t("common.failure"), msg: errMsg(t, e) }),
+  });
+
+  const price = plan ? (period === "ANNUAL" ? plan.annualPriceCents : plan.priceCents) : null;
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      size="lg"
+      title={t("billing.manual.title")}
+      sub={isUser ? t("billing.manual.subUser") : t("billing.manual.sub")}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>{t("common.cancel")}</Button>
+          <Button variant="primary" disabled={!valid || createM.isPending} onClick={() => createM.mutate()}>
+            {createM.isPending ? t("common.saving") : t("billing.manual.submit")}
+          </Button>
+        </>
+      }
+    >
+      {offersLoading ? (
+        <p style={{ margin: 0, color: "var(--ink-500)" }}>{t("common.loading")}</p>
+      ) : offersError ? (
+        <p style={{ margin: 0, color: "var(--ink-500)" }}>{errMsg(t, offersError)}</p>
+      ) : planOffers.length === 0 ? (
+        <p style={{ margin: 0, color: "var(--ink-500)" }}>{t("billing.manual.noPlan")}</p>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+            <Field label={t("billing.subs.plan")} hint={scope ? t(`billing.scope.${scope}`) : undefined}>
+              <Select value={planCode} onChange={(e) => setPlanCode(e.target.value)}>
+                {planOffers.map((o) => (
+                  <option key={o.id} value={o.planCode!}>
+                    {o.name} · {t(`billing.scope.${offerScope(o) ?? "LOCALITY"}`)}{o.active ? "" : ` (${t("billing.offers.archived")})`}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label={t("billing.subs.period")} hint={price != null ? `${money(price, plan?.currency ?? "EUR", locale)} ${t(`billing.per.${period}`)} · ${t("billing.manual.priceHint")}` : undefined}>
+              <Select value={period} onChange={(e) => setPeriod(e.target.value as BillingPeriod)}>
+                <option value="MONTHLY">{t("billing.period.MONTHLY")}</option>
+                {!isUser && plan?.annualPriceCents != null && <option value="ANNUAL">{t("billing.period.ANNUAL")}</option>}
+              </Select>
+            </Field>
+            <Field label={t("billing.manual.endDate")} hint={t("billing.manual.endDateHint")}>
+              <Input type="date" min={today} value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+            </Field>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <Field label={t("billing.subs.ministry")}>
+              <Select value={ministryId} onChange={(e) => setMinistryId(e.target.value)}>
+                <option value="">{t("billing.manual.pickMinistry")}</option>
+                {(ministriesQ.data ?? []).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </Select>
+            </Field>
+            {!isUser && (
+              <Field label={t("billing.subs.city")} hint={ministryId && !localitiesQ.isLoading && (localitiesQ.data ?? []).length === 0 ? t("billing.manual.noCity") : undefined}>
+                <Select value={localityId} disabled={!ministryId} onChange={(e) => setLocalityId(e.target.value)}>
+                  <option value="">{t("billing.manual.pickCity")}</option>
+                  {(localitiesQ.data ?? []).map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
+                </Select>
+              </Field>
+            )}
+          </div>
+          {isUser ? (
+            ministryId ? (
+              // D-ABO-31 — recherche serveur dans le ministère, dirigeants seuls (filtre d'affichage).
+              <RemoteUserCombobox
+                key={ministryId}
+                ministryId={ministryId}
+                label={t("billing.manual.leader")}
+                hint={t("billing.manual.leaderHint")}
+                value={leaderId}
+                onChange={(v) => setLeaderId(v)}
+                filter={isManagerAccount}
+                t={t}
+              />
+            ) : (
+              <div style={{ fontSize: 12.5, color: "var(--ink-500)" }}>{t("billing.manual.pickMinistryFirst")}</div>
+            )
+          ) : (
+            <RemoteUserCombobox
+              ministryId={ministryId || undefined}
+              label={t("billing.manual.payer")}
+              hint={t("billing.manual.payerHint")}
+              value={payerId}
+              onChange={(v) => setPayerId(v)}
+              t={t}
+            />
+          )}
+          <Field label={t("billing.subs.notes")}>
+            <textarea className="input" rows={3} maxLength={2000} value={notes} onChange={(e) => setNotes(e.target.value)} />
+          </Field>
+        </div>
+      )}
+    </Modal>
   );
 }
 
@@ -344,12 +778,18 @@ function SubscriptionDrawer({ id, onClose }: { id: string; onClose: () => void }
 
   const q = useQuery({ queryKey: ["billing", "subscription", id], queryFn: () => getBillingSubscription(id) });
   const ministriesQ = useQuery({ queryKey: ["ministries"], queryFn: listMinistries });
+  const offersQ = useQuery({ queryKey: ["billing", "offers"], queryFn: listOffers });
   const s = q.data;
+  // D-ABO-31 (JP 27/10) — plan USER : bénéficiaire = payeur (un dirigeant), aucune ville.
+  const scope = s ? subScope(s, offersQ.data ?? []) : null;
+  const isUserPlan = scope === "USER";
 
   const [ministryId, setMinistryId] = useState("");
   const [payerId, setPayerId] = useState("");
   const [notes, setNotes] = useState("");
+  const [endDate, setEndDate] = useState("");
   const [cancelOpen, setCancelOpen] = useState(false);
+  const today = todayParis();
 
   // Formulaire réaligné à chaque relecture (après une écriture ou à l'ouverture).
   useEffect(() => {
@@ -357,6 +797,7 @@ function SubscriptionDrawer({ id, onClose }: { id: string; onClose: () => void }
     setMinistryId(s.ministryId ?? "");
     setPayerId(s.payerUserId);
     setNotes(s.notes ?? "");
+    setEndDate(s.manualEndDate ?? "");
   }, [s]);
 
   const patchM = useMutation({
@@ -373,6 +814,11 @@ function SubscriptionDrawer({ id, onClose }: { id: string; onClose: () => void }
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["billing"] });
       setCancelOpen(false);
+      if (s?.source === "MANUEL") {
+        // RG-ABO-29 — MANUEL : aucun appel Stripe, le statut est posé tout de suite.
+        push({ kind: "ok", title: t("billing.manual.endedToast"), msg: "" });
+        return;
+      }
       // RG-ABO-08 — le statut final arrive par l'événement Stripe, pas par cette réponse.
       push({ kind: "ok", title: t("billing.subs.cancelRequestedToast"), msg: t("billing.subs.cancelRequestedHint") });
     },
@@ -386,23 +832,58 @@ function SubscriptionDrawer({ id, onClose }: { id: string; onClose: () => void }
   });
 
   const address = s ? formatAddress(s.billingAddress) : null;
+  const isManual = s?.source === "MANUEL";
+  // D-OFF-08 (JP 27/10) — VOUCHER : comme un MANUEL pour l'affichage (date de fin, ni Stripe ni facture) ; il se
+  // prolonge par un nouveau code saisi sur le web, pas d'ici (PATCH `manualEndDate` réservé au MANUEL).
+  const isVoucher = s?.source === "VOUCHER";
+  const offStripe = isManual || isVoucher;
   // Même règle que le serveur (contrat §12, ABO2) : CANCELED, EXPIRED ou sans abonnement Stripe (PENDING)
   // → 422 BILLING_SUBSCRIPTION_NOT_ACTIVE ; on ne propose donc pas « Résilier » dans ces cas.
-  const canCancel = !!s && s.status !== "CANCELED" && s.status !== "EXPIRED" && !!s.stripeSubscriptionId;
+  // RG-ABO-29 (JP 27/10) — MANUEL : « Mettre fin » tant qu'il n'est pas EXPIRED ; un CANCELED ne peut plus
+  // que finir immédiatement (contrat 27/10 §6).
+  const canCancel = !!s && (isManual
+    ? s.status !== "EXPIRED"
+    : s.status !== "CANCELED" && s.status !== "EXPIRED" && !!s.stripeSubscriptionId);
+  const canEndAtTerm = !!s && !(isManual && s.status === "CANCELED");
+  // D-ABO-20 — fin de grâce d'un plan impayé (information ; le droit lui-même est `entitled`, calculé serveur).
+  // Revue PP-O1 (27/10) — même condition que `BillingSubscription.graceEndsAt()` (plan STRIPE en PAST_DUE), et
+  // rien d'affiché quand le serveur a déjà fermé le droit (`entitled` faux) : le texte ne contredit jamais le badge.
+  const grace = s && s.planCode && s.source === "STRIPE" && s.status === "PAST_DUE" && s.entitled
+    ? graceEnd(s.pastDueSince) : null;
+  const endDateValid = /^\d{4}-\d{2}-\d{2}$/.test(endDate) && endDate >= today;
 
   const info: [string, ReactNode][] = s ? [
     [t("billing.subs.offer"), s.offerName],
+    ...(s.planCode ? [
+      [t("billing.subs.plan"), <code key="p">{s.planCode}</code>],
+      [t("billing.scope.label"), <ScopeBadge key="sc" scope={scope} />],
+      isUserPlan
+        ? [t("billing.subs.beneficiaryLeader"), s.beneficiaryName ?? s.payerName ?? "—"]
+        : [t("billing.subs.city"), s.localityName ?? "—"],
+      [t("billing.subs.entitled"), <EntitledBadge key="e" s={s} />],
+    ] as [string, ReactNode][] : []),
+    [t("billing.subs.source"), <SourceBadge key="src" source={s.source} />],
+    [t("billing.subs.period"), t(`billing.period.${s.billingPeriod}`)],
     [t("billing.subs.listPrice"), `${money(s.listPriceCents, s.currency, locale)} ${t(`billing.per.${s.billingPeriod}`)}`],
     [t("billing.subs.discount"), s.promoCode ? `${s.promoCode}${s.discountPercent != null ? ` (−${s.discountPercent} %)` : ""}` : "—"],
     [t("billing.subs.price"), `${money(s.priceCents, s.currency, locale)} ${t(`billing.per.${s.billingPeriod}`)}`],
     [t("billing.subs.createdAt"), fmtDateTime(s.createdAt, locale)],
     [t("billing.subs.activatedAt"), fmtDateTime(s.activatedAt, locale)],
-    [t("billing.subs.nextDue"), fmtDate(s.currentPeriodEnd, locale)],
+    offStripe
+      ? [t("billing.manual.endDate"), fmtDay(s.manualEndDate, locale)]
+      : [t("billing.subs.nextDue"), fmtDate(s.currentPeriodEnd, locale)],
+    ...(grace ? [
+      [t("billing.subs.pastDueSince"), fmtDateTime(s.pastDueSince, locale)],
+      [t("billing.subs.graceEnd"), <strong key="g">{fmtDate(grace, locale)}</strong>],
+    ] as [string, ReactNode][] : []),
     [t("billing.subs.canceledAt"), fmtDateTime(s.canceledAt, locale)],
     [t("billing.subs.payer"), `${s.payerName ?? "—"}${s.payerEmail ? ` · ${s.payerEmail}` : ""}`],
-    [t("billing.subs.billingAddress"), address ? <span style={{ whiteSpace: "pre-line" }}>{address}</span> : "—"],
-    [t("billing.subs.stripeCustomer"), <code key="c">{s.stripeCustomerId ?? "—"}</code>],
-    [t("billing.subs.stripeSubscription"), <code key="s">{s.stripeSubscriptionId ?? "—"}</code>],
+    // Un MANUEL / VOUCHER n'a ni client Stripe ni adresse de facturation (aucun paiement en ligne, D-ABO-24, D-OFF-08).
+    ...(offStripe ? [] : [
+      [t("billing.subs.billingAddress"), address ? <span style={{ whiteSpace: "pre-line" }}>{address}</span> : "—"],
+      [t("billing.subs.stripeCustomer"), <code key="c">{s.stripeCustomerId ?? "—"}</code>],
+      [t("billing.subs.stripeSubscription"), <code key="s">{s.stripeSubscriptionId ?? "—"}</code>],
+    ] as [string, ReactNode][]),
   ] : [];
 
   return (
@@ -425,9 +906,42 @@ function SubscriptionDrawer({ id, onClose }: { id: string; onClose: () => void }
               ))}
             </div>
 
-            {/* D-ABO-05 — ministère lié, modifiable ; « aucun » = délier (ministryId: null explicite). */}
+            {grace && (
+              <div style={{ fontSize: 13, color: "var(--ink-500)" }}>{t(isUserPlan ? "billing.subs.graceHintUser" : "billing.subs.graceHint", { date: fmtDate(grace, locale) })}</div>
+            )}
+
+            {/* RG-ABO-29 (JP 27/10) — prolonger un MANUEL ; un EXPIRED / CANCELED redevient ACTIVE (RG-ABO-30 contrôlée). */}
+            {isManual && (
+              <div>
+                <h4 style={{ margin: "0 0 8px" }}>{t("billing.manual.extendTitle")}</h4>
+                <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+                  <Input type="date" min={today} value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+                  <Button size="sm" variant="primary" disabled={patchM.isPending || !endDateValid || (endDate === (s.manualEndDate ?? "") && s.status === "ACTIVE")}
+                    onClick={() => patchM.mutate({ manualEndDate: endDate })}>
+                    {t("billing.manual.extend")}
+                  </Button>
+                </div>
+                <div style={{ fontSize: 12.5, color: "var(--ink-500)", marginTop: 6 }}>
+                  {s.status === "EXPIRED" || s.status === "CANCELED" ? t("billing.manual.extendReactivates") : t("billing.manual.extendHint")}
+                </div>
+              </div>
+            )}
+
+            {isVoucher && (
+              <div style={{ fontSize: 13, color: "var(--ink-500)" }}>{t("billing.vouchers.subscriptionHint")}</div>
+            )}
+
+            {/* D-ABO-05 — ministère lié, modifiable ; « aucun » = délier (ministryId: null explicite).
+                Revue PP-O1 (27/10) — pour un plan, le ministère est celui de la ville (contrat §5.1 / §6) :
+                lecture seule, sinon le filtre « Ville » (ministère + ville) ne retrouverait plus l'abonnement. */}
             <div>
               <h4 style={{ margin: "0 0 8px" }}>{t("billing.subs.ministry")}</h4>
+              {s.planCode ? (
+                <div style={{ fontSize: 13.5 }}>
+                  <div>{s.ministryName ?? "—"}</div>
+                  <div style={{ fontSize: 12.5, color: "var(--ink-500)", marginTop: 4 }}>{t(isUserPlan ? "billing.subs.ministryFromUser" : "billing.subs.ministryFromCity")}</div>
+                </div>
+              ) : (
               <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
                 <Select value={ministryId} onChange={(e) => setMinistryId(e.target.value)}>
                   <option value="">{t("billing.subs.noMinistry")}</option>
@@ -438,6 +952,7 @@ function SubscriptionDrawer({ id, onClose }: { id: string; onClose: () => void }
                   {t("common.save")}
                 </Button>
               </div>
+              )}
               {/* D-ABO-15 — lien vers la couverture de modules du ministère, pour que JP décide (D-ABO-01). */}
               {s.ministryId && (
                 <Button size="sm" variant="ghost" style={{ marginTop: 8 }} iconR={<Icons.ArrowRight size={14} />}
@@ -447,11 +962,15 @@ function SubscriptionDrawer({ id, onClose }: { id: string; onClose: () => void }
               )}
             </div>
 
-            {/* D-ABO-07 — le SUPER_ADMIN peut changer le payeur. */}
+            {/* D-ABO-07 — le SUPER_ADMIN peut changer le payeur. D-ABO-31 (JP 27/10) — sur un plan USER le payeur
+                EST le bénéficiaire : le changer déplace le droit vers un autre dirigeant (dirigeants seuls proposés). */}
             <div>
-              <h4 style={{ margin: "0 0 8px" }}>{t("billing.subs.changePayer")}</h4>
+              <h4 style={{ margin: "0 0 8px" }}>{t(isUserPlan ? "billing.subs.changeBeneficiary" : "billing.subs.changePayer")}</h4>
               <RemoteUserCombobox
-                label={t("billing.subs.payer")}
+                ministryId={isUserPlan ? (s.ministryId ?? undefined) : undefined}
+                filter={isUserPlan ? isManagerAccount : undefined}
+                hint={isUserPlan ? t("billing.subs.changeBeneficiaryHint") : undefined}
+                label={t(isUserPlan ? "billing.subs.beneficiaryLeader" : "billing.subs.payer")}
                 value={payerId}
                 selected={s.payerUserId === payerId ? { id: s.payerUserId, fullName: s.payerName ?? "—", username: "", email: s.payerEmail ?? "" } : undefined}
                 onChange={(v) => setPayerId(v)}
@@ -494,7 +1013,7 @@ function SubscriptionDrawer({ id, onClose }: { id: string; onClose: () => void }
             </div>
 
             {canCancel && (
-              <Button variant="danger" onClick={() => setCancelOpen(true)}>{t("billing.subs.cancel")}</Button>
+              <Button variant="danger" onClick={() => setCancelOpen(true)}>{isManual ? t("billing.manual.end") : t("billing.subs.cancel")}</Button>
             )}
           </div>
         )}
@@ -504,17 +1023,29 @@ function SubscriptionDrawer({ id, onClose }: { id: string; onClose: () => void }
       <Modal
         open={cancelOpen}
         onClose={() => setCancelOpen(false)}
-        title={t("billing.subs.cancelTitle")}
+        title={isManual ? t("billing.manual.endTitle") : t("billing.subs.cancelTitle")}
         sub={s?.reference}
         footer={
           <>
             <Button variant="ghost" onClick={() => setCancelOpen(false)}>{t("common.close")}</Button>
-            <Button variant="secondary" disabled={cancelM.isPending} onClick={() => cancelM.mutate(false)}>{t("billing.subs.cancelAtEnd")}</Button>
+            {canEndAtTerm && (
+              <Button variant="secondary" disabled={cancelM.isPending} onClick={() => cancelM.mutate(false)}>
+                {isManual ? t("billing.manual.endAtTerm") : t("billing.subs.cancelAtEnd")}
+              </Button>
+            )}
             <Button variant="danger" disabled={cancelM.isPending} onClick={() => cancelM.mutate(true)}>{t("billing.subs.cancelNow")}</Button>
           </>
         }
       >
-        <p style={{ margin: 0 }}>{t("billing.subs.cancelBody", { date: fmtDate(s?.currentPeriodEnd, locale) })}</p>
+        <p style={{ margin: 0 }}>
+          {isManual
+            ? t(canEndAtTerm
+              ? (isUserPlan ? "billing.manual.endBodyUser" : "billing.manual.endBody")
+              : "billing.manual.endBodyCanceled", { date: fmtDay(s?.manualEndDate, locale) })
+            : s?.planCode
+              ? t(isUserPlan ? "billing.subs.cancelBodyPlanUser" : "billing.subs.cancelBodyPlan", { date: fmtDate(s?.currentPeriodEnd, locale) })
+              : t("billing.subs.cancelBody", { date: fmtDate(s?.currentPeriodEnd, locale) })}
+        </p>
       </Modal>
     </>
   );
@@ -648,9 +1179,21 @@ function InvoicesTab() {
 interface OfferForm {
   code: string; name: string; nameEn: string; description: string; descriptionEn: string;
   price: string; vatRate: string; displayOrder: string; active: boolean;
+  /** D-ABO-16 (JP 27/10) — offre à plan : code saisi à la création, immuable ensuite. */
+  isPlan: boolean; planCode: string; annualPrice: string; entitlementCodes: string[];
+  /** D-ABO-31 (JP 27/10) — portée du plan (Ville / Dirigeant), choisie à la création, immuable. */
+  planScope: PlanScope;
+  /** D-OFF-08 (JP 27/10) — prix local informatif (ex. « 1 000 FCFA / mois »), plan seulement. */
+  localPriceLabel: string;
 }
-const OFFER_EMPTY: OfferForm = { code: "", name: "", nameEn: "", description: "", descriptionEn: "", price: "", vatRate: "20", displayOrder: "0", active: true };
+const OFFER_EMPTY: OfferForm = {
+  code: "", name: "", nameEn: "", description: "", descriptionEn: "", price: "", vatRate: "20", displayOrder: "0", active: true,
+  isPlan: false, planCode: "", annualPrice: "", entitlementCodes: [], planScope: "LOCALITY", localPriceLabel: "",
+};
+/** D-OFF-08 — longueur maximale du prix local (texte libre affiché à côté du champ code, web). */
+const LOCAL_PRICE_MAX = 80; // = @Size(max = 80) de OfferRequest.localPriceLabel (bil_offer.local_price_label VARCHAR(80))
 const OFFER_CODE_RE = /^[a-z0-9-]{3,40}$/; // RG-ABO-01
+const PLAN_CODE_RE = /^[A-Z0-9_]{3,40}$/; // contrat 27/10 §6 (OfferRequest.planCode)
 
 function OffersTab() {
   const { t } = useTranslation();
@@ -658,29 +1201,57 @@ function OffersTab() {
   const qc = useQueryClient();
   const { push } = useToasts();
   const q = useQuery({ queryKey: ["billing", "offers"], queryFn: listOffers });
+  // D-ABO-16 — codes de droit = `sub_module.code` (catalogue des modules, page /abonnements).
+  const modulesQ = useQuery({ queryKey: ["modules"], queryFn: listModules });
   const [editing, setEditing] = useState<AdminOffer | "new" | null>(null);
   const [form, setForm] = useState<OfferForm>(OFFER_EMPTY);
+  const moduleName = (code: string) => {
+    const m = (modulesQ.data ?? []).find((x) => x.code === code);
+    if (!m) return code;
+    return locale.startsWith("en") ? (m.nameEn || m.name) : m.name;
+  };
 
   const open = (o: AdminOffer | "new") => {
     setEditing(o);
     setForm(o === "new" ? OFFER_EMPTY : {
       code: o.code, name: o.name, nameEn: o.nameEn ?? "", description: o.description ?? "", descriptionEn: o.descriptionEn ?? "",
       price: (o.priceCents / 100).toFixed(2), vatRate: String(o.vatRate), displayOrder: String(o.displayOrder), active: o.active,
+      isPlan: !!o.planCode, planCode: o.planCode ?? "",
+      annualPrice: o.annualPriceCents != null ? (o.annualPriceCents / 100).toFixed(2) : "",
+      entitlementCodes: o.entitlementCodes ?? [],
+      planScope: offerScope(o) ?? "LOCALITY",
+      localPriceLabel: o.localPriceLabel ?? "",
     });
   };
 
   const priceCents = parseCents(form.price);
   const vatRate = Number(form.vatRate.replace(",", "."));
-  const valid = OFFER_CODE_RE.test(form.code) && form.name.trim() !== "" && priceCents > 0 && Number.isFinite(vatRate) && vatRate >= 0;
+  const annualCents = form.annualPrice.trim() === "" ? null : parseCents(form.annualPrice);
+  const planValid = !form.isPlan || (
+    PLAN_CODE_RE.test(form.planCode) && form.entitlementCodes.length > 0
+    && (annualCents === null || (Number.isFinite(annualCents) && annualCents > 0))
+    && form.localPriceLabel.trim().length <= LOCAL_PRICE_MAX
+  );
+  const valid = OFFER_CODE_RE.test(form.code) && form.name.trim() !== "" && priceCents > 0 && Number.isFinite(vatRate) && vatRate >= 0 && planValid;
+  const toggleCode = (code: string, on: boolean) =>
+    setForm({ ...form, entitlementCodes: on ? [...form.entitlementCodes, code] : form.entitlementCodes.filter((c) => c !== code) });
 
   const saveM = useMutation({
     mutationFn: () => {
-      // D-ABO-03 — V1 : EUR et MONTHLY seuls (le serveur refuse le reste).
+      // D-ABO-03 — EUR ; prix de base MENSUEL. D-ABO-18 (JP 27/10) : le prix annuel est un champ à part, plan seulement.
       const req: OfferRequest = {
         code: form.code, name: form.name.trim(), nameEn: form.nameEn.trim() || null,
         description: form.description.trim() || null, descriptionEn: form.descriptionEn.trim() || null,
         priceCents, currency: "EUR", billingPeriod: "MONTHLY", vatRate,
         active: form.active, displayOrder: Number(form.displayOrder) || 0,
+        // Contrat 27/10 §6 — champs plan absents (null) sur une offre sans plan, sinon 400 INVALID_PARAMETER.
+        planCode: form.isPlan ? form.planCode : null,
+        // D-ABO-31 (JP 27/10) — immuable : renvoyée telle quelle au PUT.
+        planScope: form.isPlan ? form.planScope : null,
+        annualPriceCents: form.isPlan ? annualCents : null,
+        entitlementCodes: form.isPlan ? form.entitlementCodes : undefined,
+        // D-OFF-08 (JP 27/10) — information seulement (aucune devise FCFA dans Stripe) ; vide = null.
+        localPriceLabel: form.isPlan ? (form.localPriceLabel.trim() || null) : null,
       };
       return editing === "new" ? createOffer(req) : updateOffer((editing as AdminOffer).id, req);
     },
@@ -715,6 +1286,19 @@ function OffersTab() {
             { label: t("billing.offers.order"), render: (o: AdminOffer) => o.displayOrder },
             { label: t("billing.offers.code"), render: (o: AdminOffer) => <code>{o.code}</code> },
             {
+              // D-ABO-16 (JP 27/10) — formule et codes de droit ouverts à la ville.
+              label: t("billing.subs.plan"),
+              render: (o: AdminOffer) => o.planCode ? (
+                <div>
+                  <code>{o.planCode}</code>
+                  {planSubtitle(t, o.planCode) && <div style={{ fontSize: 12.5, marginTop: 2 }}>{planSubtitle(t, o.planCode)}</div>}
+                  <div style={{ fontSize: 12, color: "var(--ink-500)", marginTop: 2 }}>{(o.entitlementCodes ?? []).join(" · ")}</div>
+                </div>
+              ) : <span style={{ color: "var(--ink-400)" }}>{t("billing.offers.noPlan")}</span>,
+            },
+            // D-ABO-31 (JP 27/10) — portée du plan : Ville ou Dirigeant (personnelle).
+            { label: t("billing.scope.label"), render: (o: AdminOffer) => <ScopeBadge scope={offerScope(o)} /> },
+            {
               label: t("billing.offers.name"),
               render: (o: AdminOffer) => (
                 <div>
@@ -723,7 +1307,20 @@ function OffersTab() {
                 </div>
               ),
             },
-            { label: t("billing.subs.price"), render: (o: AdminOffer) => `${money(o.priceCents, o.currency, locale)} ${t("billing.ttc")} ${t(`billing.per.${o.billingPeriod}`)}` },
+            {
+              label: t("billing.subs.price"),
+              render: (o: AdminOffer) => (
+                <div>
+                  <div>{`${money(o.priceCents, o.currency, locale)} ${t("billing.ttc")} ${t(`billing.per.${o.billingPeriod}`)}`}</div>
+                  {o.annualPriceCents != null && (
+                    <div style={{ fontSize: 12.5, color: "var(--ink-500)" }}>{`${money(o.annualPriceCents, o.currency, locale)} ${t("billing.ttc")} ${t("billing.per.ANNUAL")}`}</div>
+                  )}
+                  {o.localPriceLabel && (
+                    <div style={{ fontSize: 12.5, color: "var(--ink-500)" }}>{t("billing.offers.localPriceShort", { label: o.localPriceLabel })}</div>
+                  )}
+                </div>
+              ),
+            },
             { label: t("billing.offers.vat"), render: (o: AdminOffer) => `${o.vatRate} %` },
             { label: t("billing.offers.subscriptions"), render: (o: AdminOffer) => o.subscriptionCount },
             { label: t("billing.subs.status"), render: (o: AdminOffer) => <Badge tone={o.active ? "ok" : "gray"} dot>{o.active ? t("billing.offers.active") : t("billing.offers.archived")}</Badge> },
@@ -783,6 +1380,74 @@ function OffersTab() {
               <Input value={`EUR · ${t("billing.period.MONTHLY")}`} disabled />
             </Field>
             <Field label={t("billing.offers.order")}><Input type="number" value={form.displayOrder} onChange={(e) => setForm({ ...form, displayOrder: e.target.value })} /></Field>
+          </div>
+
+          {/* D-ABO-16..18 (JP 27/10) — PLAN : code immuable, prix annuel facultatif, codes de droit ouverts à la ville. */}
+          <div style={{ borderTop: "1px solid var(--line,#eee)", paddingTop: 12, display: "flex", flexDirection: "column", gap: 12 }}>
+            {/* D-ABO-31 (JP 27/10) — type d'offre : sans formule / formule de ville / formule personnelle de dirigeant. */}
+            <Field label={t("billing.offers.kind")} hint={editing === "new" ? t("billing.offers.isPlanHint") : t("billing.offers.planImmutable")}>
+              <Select value={form.isPlan ? form.planScope : "NONE"} disabled={editing !== "new"}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setForm(v === "NONE" ? { ...form, isPlan: false } : { ...form, isPlan: true, planScope: v as PlanScope });
+                }}>
+                <option value="NONE">{t("billing.offers.kindNone")}</option>
+                <option value="LOCALITY">{t("billing.offers.kindLocality")}</option>
+                <option value="USER">{t("billing.offers.kindUser")}</option>
+              </Select>
+            </Field>
+            {form.isPlan && (
+              <div style={{ fontSize: 12.5, color: "var(--ink-500)", marginTop: -6 }}>
+                {t(form.planScope === "USER" ? "billing.offers.scopeUserHint" : "billing.offers.scopeLocalityHint")}
+              </div>
+            )}
+            {form.isPlan && (
+              <>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  <Field label={t("billing.offers.planCode")} hint={editing === "new" ? t("billing.offers.planCodeHint") : t("billing.offers.codeImmutable")}>
+                    <Input value={form.planCode} disabled={editing !== "new"} maxLength={40}
+                      onChange={(e) => setForm({ ...form, planCode: e.target.value.toUpperCase() })} />
+                  </Field>
+                  <Field label={t("billing.offers.annualPriceTtc")}
+                    hint={annualCents != null && Number.isFinite(annualCents) && annualCents > 0 ? `${money(annualCents, "EUR", locale)} ${t("billing.per.ANNUAL")}` : t("billing.offers.annualHint")}>
+                    <Input inputMode="decimal" value={form.annualPrice} onChange={(e) => setForm({ ...form, annualPrice: e.target.value })} />
+                  </Field>
+                </div>
+                {/* D-OFF-08 (JP 27/10) — prix local : texte libre, INFORMATION seulement, affiché sur le web à côté du
+                    champ code (« Mobile Money auprès de votre relais — … »). Jamais sur mobile. */}
+                <Field label={t("billing.offers.localPrice")} hint={t("billing.offers.localPriceHint")}>
+                  <Input value={form.localPriceLabel} maxLength={LOCAL_PRICE_MAX} placeholder={t("billing.offers.localPricePlaceholder")}
+                    onChange={(e) => setForm({ ...form, localPriceLabel: e.target.value })} />
+                </Field>
+                <Field label={t("billing.offers.entitlements")} hint={t("billing.offers.entitlementsHint")}>
+                  {modulesQ.isLoading ? (
+                    <div style={{ color: "var(--ink-500)" }}>{t("common.loading")}</div>
+                  ) : (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 16px" }}>
+                      {(modulesQ.data ?? []).map((m) => (
+                        <label key={m.code} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                          <Checkbox checked={form.entitlementCodes.includes(m.code)} onChange={(v) => toggleCode(m.code, v)} />
+                          <span>
+                            {moduleName(m.code)} <span style={{ color: "var(--ink-400)" }}>({m.code})</span>
+                            {m.free && <> <Badge tone="green">{t("billing.offers.freeModule")}</Badge></>}
+                          </span>
+                        </label>
+                      ))}
+                      {/* Un code déjà porté par le plan mais absent du catalogue reste visible pour pouvoir le retirer. */}
+                      {form.entitlementCodes.filter((c) => !(modulesQ.data ?? []).some((m) => m.code === c)).map((c) => (
+                        <label key={c} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                          <Checkbox checked onChange={(v) => toggleCode(c, v)} />
+                          <code>{c}</code>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </Field>
+                {form.entitlementCodes.length === 0 && (
+                  <div style={{ fontSize: 12.5, color: "var(--err)" }}>{t("billing.offers.entitlementsRequired")}</div>
+                )}
+              </>
+            )}
           </div>
         </div>
       </Modal>
@@ -979,5 +1644,367 @@ function PromoSubscriptionsModal({ promo, onClose }: { promo: AdminPromoCode; on
         />
       )}
     </Modal>
+  );
+}
+
+// ---------- Vouchers — D-OFF-08 (JP 27/10, lot « Offres Caleb / Néhémie », §3.6) ----------
+
+function voucherTone(s: VoucherStatus): "ok" | "gray" | "warn" {
+  if (s === "ACTIVE") return "ok";
+  if (s === "REVOKED") return "warn";
+  return "gray";
+}
+
+/**
+ * Date limite passée : plus aucun code du lot n'est saisissable (422 `VOUCHER_EXPIRED`, contrôlé par le serveur).
+ * Contrôle croisé 27/10 : `expiresAt` est un `LocalDate` Java (`YYYY-MM-DD`, INCLUSE, Europe/Paris) — comparé
+ * à « aujourd'hui » à Paris, jamais converti en instant.
+ */
+function batchExpired(b: Pick<VoucherBatch, "expiresAt">): boolean {
+  return !!b.expiresAt && b.expiresAt < todayParis();
+}
+
+function VouchersTab() {
+  const { t } = useTranslation();
+  const locale = useLocale();
+  const download = useDownload();
+  const [ministryId, setMinistryId] = useState("");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [openBatch, setOpenBatch] = useState<VoucherBatch | null>(null);
+
+  const q = useQuery({ queryKey: ["billing", "vouchers", "batches"], queryFn: listVoucherBatches });
+  const ministriesQ = useQuery({ queryKey: ["ministries"], queryFn: listMinistries });
+  const offersQ = useQuery({ queryKey: ["billing", "offers"], queryFn: listOffers });
+  const offers = offersQ.data ?? [];
+
+  const rows = (q.data ?? [])
+    .filter((b) => !ministryId || b.ministryId === ministryId)
+    .map((b) => ({ ...b, _key: b.id }));
+
+  return (
+    <div className="card" style={{ padding: 0 }}>
+      <div style={{ display: "flex", gap: 12, padding: "12px 16px", flexWrap: "wrap", alignItems: "flex-end", borderBottom: "1px solid var(--line,#eee)" }}>
+        <span style={{ color: "var(--ink-500)", fontSize: 13.5, flex: "1 1 320px", alignSelf: "center" }}>{t("billing.vouchers.hint")}</span>
+        <Field label={t("billing.subs.ministry")}>
+          <Select value={ministryId} onChange={(e) => setMinistryId(e.target.value)}>
+            <option value="">{t("billing.allMinistries")}</option>
+            {(ministriesQ.data ?? []).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </Select>
+        </Field>
+        <div style={{ paddingBottom: 6 }}>
+          <Button variant="primary" size="sm" iconL={<Icons.Plus size={15} />} onClick={() => setCreateOpen(true)}>
+            {t("billing.vouchers.create")}
+          </Button>
+        </div>
+      </div>
+      {q.isLoading ? (
+        <div style={{ padding: 24, color: "var(--ink-500)" }}>{t("common.loading")}</div>
+      ) : q.isError ? (
+        <div style={{ padding: 24, color: "var(--ink-500)" }}>{errMsg(t, q.error)}</div>
+      ) : (
+        <Table
+          rows={rows}
+          onRowClick={(b: VoucherBatch) => setOpenBatch(b)}
+          empty={<div style={{ padding: 24, color: "var(--ink-500)" }}>{t("billing.vouchers.empty")}</div>}
+          columns={[
+            { label: t("billing.subs.createdAt"), render: (b: VoucherBatch) => fmtDate(b.createdAt, locale) },
+            { label: t("billing.vouchers.label"), render: (b: VoucherBatch) => b.label ?? "—" },
+            {
+              label: t("billing.subs.offer"),
+              render: (b: VoucherBatch) => {
+                const o = offers.find((x) => x.code === b.offerCode);
+                return (
+                  <div>
+                    <div style={{ fontWeight: 500 }}>{b.offerName}</div>
+                    {o && <ScopeBadge scope={offerScope(o)} />}
+                  </div>
+                );
+              },
+            },
+            { label: t("billing.subs.ministry"), render: (b: VoucherBatch) => b.ministryName },
+            { label: t("billing.vouchers.duration"), render: (b: VoucherBatch) => t("billing.vouchers.days", { count: b.durationDays }) },
+            { label: t("billing.vouchers.used"), render: (b: VoucherBatch) => `${b.usedCount} / ${b.quantity}` },
+            {
+              label: t("billing.vouchers.expiresAt"),
+              render: (b: VoucherBatch) => (
+                <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                  {b.expiresAt ? fmtDay(b.expiresAt, locale) : t("billing.vouchers.noExpiry")}
+                  {batchExpired(b) && <Badge tone="gray">{t("billing.vouchers.expired")}</Badge>}
+                </span>
+              ),
+            },
+            {
+              label: "",
+              render: (b: VoucherBatch) => (
+                <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
+                  <Button size="sm" variant="ghost" onClick={() => setOpenBatch(b)}>{t("billing.vouchers.codes")}</Button>
+                  <Button size="sm" variant="ghost" iconL={<Icons.Download size={14} />} onClick={() => download(() => exportVoucherCodesCsv(b))}>
+                    {t("billing.vouchers.csv")}
+                  </Button>
+                </div>
+              ),
+            },
+          ]}
+        />
+      )}
+      {createOpen && (
+        <VoucherBatchModal
+          offers={offers}
+          offersLoading={offersQ.isLoading}
+          offersError={offersQ.isError ? offersQ.error : null}
+          onClose={() => setCreateOpen(false)}
+          onCreated={(b) => { setCreateOpen(false); setOpenBatch(b); }}
+        />
+      )}
+      {openBatch && <VoucherCodesModal batch={openBatch} onClose={() => setOpenBatch(null)} />}
+    </div>
+  );
+}
+
+/**
+ * D-OFF-08 (JP 27/10) — créer un lot : offre à formule (Caleb ou Néhémie, offres actives), ministère, durée en jours
+ * (fixée par le SUPER_ADMIN), quantité ≤ 500, date limite facultative, libellé libre.
+ */
+function VoucherBatchModal({
+  offers, offersLoading, offersError, onClose, onCreated,
+}: {
+  offers: AdminOffer[];
+  offersLoading: boolean;
+  offersError: unknown;
+  onClose: () => void;
+  onCreated: (b: VoucherBatch) => void;
+}) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const { push } = useToasts();
+  const planOffers = offers.filter((o) => !!o.planCode && o.active);
+  const [offerCode, setOfferCode] = useState(planOffers[0]?.code ?? "");
+  const [ministryId, setMinistryId] = useState("");
+  const [duration, setDuration] = useState("30");
+  const [quantity, setQuantity] = useState("10");
+  const [expiresAt, setExpiresAt] = useState("");
+  const [label, setLabel] = useState("");
+  const ministriesQ = useQuery({ queryKey: ["ministries"], queryFn: listMinistries });
+
+  // Les offres peuvent arriver après l'ouverture : on choisit alors la première formule proposée.
+  useEffect(() => {
+    if (!offerCode && planOffers.length > 0) setOfferCode(planOffers[0].code);
+  }, [planOffers, offerCode]);
+
+  const offer = planOffers.find((o) => o.code === offerCode);
+  const durationDays = Number(duration);
+  const qty = Number(quantity);
+  // Contrôle croisé 27/10 : `VoucherBatchRequest.expiresAt` est un `LocalDate` Java (`YYYY-MM-DD`, incluse,
+  // Europe/Paris, ≥ aujourd'hui — 400 `INVALID_PARAMETER` sinon) : on envoie la date seule, jamais un instant.
+  const today = todayParis();
+  const valid = !!offer && !!ministryId
+    && Number.isInteger(durationDays) && durationDays >= 1 && durationDays <= VOUCHER_MAX_DURATION_DAYS
+    && Number.isInteger(qty) && qty >= 1 && qty <= VOUCHER_MAX_QUANTITY
+    && (!expiresAt || (/^\d{4}-\d{2}-\d{2}$/.test(expiresAt) && expiresAt >= today))
+    && label.length <= 200;
+
+  const createM = useMutation({
+    mutationFn: () => createVoucherBatch({
+      offerCode, ministryId, durationDays, quantity: qty,
+      expiresAt: expiresAt || null, label: label.trim() || null,
+    }),
+    onSuccess: (b) => {
+      qc.invalidateQueries({ queryKey: ["billing", "vouchers"] });
+      push({ kind: "ok", title: t("billing.vouchers.createdToast"), msg: t("billing.vouchers.createdMsg", { count: b.quantity }) });
+      onCreated(b);
+    },
+    onError: (e) => push({ kind: "error", title: t("common.failure"), msg: errMsg(t, e) }),
+  });
+
+  const scope = offer ? offerScope(offer) : null;
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      size="lg"
+      title={t("billing.vouchers.createTitle")}
+      sub={t("billing.vouchers.createSub")}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>{t("common.cancel")}</Button>
+          <Button variant="primary" disabled={!valid || createM.isPending} onClick={() => createM.mutate()}>
+            {createM.isPending ? t("common.saving") : t("billing.vouchers.generate")}
+          </Button>
+        </>
+      }
+    >
+      {offersLoading ? (
+        <p style={{ margin: 0, color: "var(--ink-500)" }}>{t("common.loading")}</p>
+      ) : offersError ? (
+        <p style={{ margin: 0, color: "var(--ink-500)" }}>{errMsg(t, offersError)}</p>
+      ) : planOffers.length === 0 ? (
+        <p style={{ margin: 0, color: "var(--ink-500)" }}>{t("billing.manual.noPlan")}</p>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <Field label={t("billing.subs.offer")} hint={scope ? t(scope === "USER" ? "billing.vouchers.scopeUserHint" : "billing.vouchers.scopeLocalityHint") : undefined}>
+              <Select value={offerCode} onChange={(e) => setOfferCode(e.target.value)}>
+                {planOffers.map((o) => (
+                  <option key={o.id} value={o.code}>
+                    {o.name}{planSubtitle(t, o.planCode) ? ` — ${planSubtitle(t, o.planCode)}` : ""} · {t(`billing.scope.${offerScope(o) ?? "LOCALITY"}`)}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label={t("billing.subs.ministry")} hint={t("billing.vouchers.ministryHint")}>
+              <Select value={ministryId} onChange={(e) => setMinistryId(e.target.value)}>
+                <option value="">{t("billing.manual.pickMinistry")}</option>
+                {(ministriesQ.data ?? []).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </Select>
+            </Field>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+            <Field label={t("billing.vouchers.durationDays")} hint={t("billing.vouchers.durationHint")}>
+              <Input type="number" min={1} max={VOUCHER_MAX_DURATION_DAYS} value={duration} onChange={(e) => setDuration(e.target.value)} />
+            </Field>
+            <Field label={t("billing.vouchers.quantity")} hint={t("billing.vouchers.quantityHint", { max: VOUCHER_MAX_QUANTITY })}>
+              <Input type="number" min={1} max={VOUCHER_MAX_QUANTITY} value={quantity} onChange={(e) => setQuantity(e.target.value)} />
+            </Field>
+            <Field label={t("billing.vouchers.expiresAt")} hint={t("billing.vouchers.expiresHint")}>
+              <Input type="date" min={today} value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} />
+            </Field>
+          </div>
+          <Field label={t("billing.vouchers.label")} hint={t("billing.vouchers.labelHint")}>
+            <Input value={label} maxLength={200} onChange={(e) => setLabel(e.target.value)} />
+          </Field>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+/** D-OFF-08 — codes d'un lot (statut, utilisé par, le, abonnement, ville), export CSV, révocation d'un code non utilisé. */
+function VoucherCodesModal({ batch, onClose }: { batch: VoucherBatch; onClose: () => void }) {
+  const { t } = useTranslation();
+  const locale = useLocale();
+  const qc = useQueryClient();
+  const { push } = useToasts();
+  const download = useDownload();
+  const [status, setStatus] = useState<VoucherStatus | "">("");
+  const [search, setSearch] = useState("");
+  const [toRevoke, setToRevoke] = useState<VoucherCode | null>(null);
+
+  const q = useQuery({ queryKey: ["billing", "vouchers", "codes", batch.id], queryFn: () => listVoucherCodes(batch.id) });
+
+  const revokeM = useMutation({
+    mutationFn: (c: VoucherCode) => revokeVoucher(c.code),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["billing", "vouchers"] });
+      setToRevoke(null);
+      push({ kind: "ok", title: t("billing.vouchers.revokedToast"), msg: "" });
+    },
+    onError: (e) => push({ kind: "error", title: t("common.failure"), msg: errMsg(t, e) }),
+  });
+
+  const copy = async (code: string) => {
+    try {
+      await navigator.clipboard.writeText(formatVoucherCode(code));
+      push({ kind: "ok", title: t("billing.vouchers.copied"), msg: formatVoucherCode(code) });
+    } catch {
+      push({ kind: "error", title: t("common.failure"), msg: formatVoucherCode(code) });
+    }
+  };
+
+  const needle = search.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  const rows = useMemo(() => (q.data ?? [])
+    .filter((c) => !status || c.status === status)
+    .filter((c) => !needle || c.code.replace(/[^A-Za-z0-9]/g, "").toUpperCase().includes(needle)
+      || (c.usedByName ?? "").toUpperCase().includes(search.trim().toUpperCase()))
+    .map((c) => ({ ...c, _key: c.code })), [q.data, status, needle, search]);
+
+  return (
+    <>
+      <Modal
+        open
+        onClose={onClose}
+        size="lg"
+        title={batch.label || batch.offerName}
+        sub={t("billing.vouchers.batchSub", {
+          offer: batch.offerName, ministry: batch.ministryName,
+          days: t("billing.vouchers.days", { count: batch.durationDays }),
+          used: batch.usedCount, quantity: batch.quantity,
+        })}
+        footer={
+          <>
+            <Button variant="ghost" onClick={onClose}>{t("common.close")}</Button>
+            <Button variant="primary" iconL={<Icons.Download size={14} />} onClick={() => download(() => exportVoucherCodesCsv(batch))}>
+              {t("billing.vouchers.csv")}
+            </Button>
+          </>
+        }
+      >
+        {batchExpired(batch) && (
+          <div style={{ marginBottom: 10 }}><Badge tone="gray">{t("billing.vouchers.expiredHint", { date: fmtDay(batch.expiresAt, locale) })}</Badge></div>
+        )}
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 10 }}>
+          <Field label={t("billing.subs.search")}>
+            <Input icon={<Icons.Search size={14} />} placeholder={t("billing.vouchers.searchPlaceholder")} value={search} onChange={(e) => setSearch(e.target.value)} />
+          </Field>
+          <Field label={t("billing.subs.status")}>
+            <Select value={status} onChange={(e) => setStatus(e.target.value as VoucherStatus | "")}>
+              <option value="">{t("billing.all")}</option>
+              {VOUCHER_STATUSES.map((x) => <option key={x} value={x}>{t(`billing.vouchers.status.${x}`)}</option>)}
+            </Select>
+          </Field>
+        </div>
+        {q.isLoading ? (
+          <div style={{ color: "var(--ink-500)" }}>{t("common.loading")}</div>
+        ) : q.isError ? (
+          <div style={{ color: "var(--ink-500)" }}>{errMsg(t, q.error)}</div>
+        ) : (
+          <Table
+            rows={rows}
+            columns={[
+              {
+                label: t("billing.vouchers.code"),
+                render: (c: VoucherCode) => (
+                  <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                    <span style={{ fontFamily: "var(--font-mono, monospace)", whiteSpace: "nowrap" }}>{formatVoucherCode(c.code)}</span>
+                    <IconButton icon={<Icons.Copy size={14} />} title={t("billing.vouchers.copy")} onClick={() => copy(c.code)} />
+                  </span>
+                ),
+              },
+              { label: t("billing.subs.status"), render: (c: VoucherCode) => <Badge tone={voucherTone(c.status)} dot>{t(`billing.vouchers.status.${c.status}`)}</Badge> },
+              { label: t("billing.vouchers.usedBy"), render: (c: VoucherCode) => c.usedByName ?? "—" },
+              { label: t("billing.vouchers.usedAt"), render: (c: VoucherCode) => fmtDateTime(c.usedAt, locale) },
+              {
+                label: t("billing.vouchers.subscription"),
+                render: (c: VoucherCode) => c.subscriptionReference
+                  ? <span style={{ fontFamily: "var(--font-mono, monospace)" }}>{c.subscriptionReference}</span>
+                  : "—",
+              },
+              { label: t("billing.subs.city"), render: (c: VoucherCode) => c.localityName ?? "—" },
+              {
+                label: "",
+                render: (c: VoucherCode) => c.status === "ACTIVE" ? (
+                  <Button size="sm" variant="ghost" onClick={() => setToRevoke(c)}>{t("billing.vouchers.revoke")}</Button>
+                ) : null,
+              },
+            ]}
+          />
+        )}
+      </Modal>
+
+      <Modal
+        open={!!toRevoke}
+        onClose={() => setToRevoke(null)}
+        title={t("billing.vouchers.revokeTitle")}
+        sub={toRevoke ? formatVoucherCode(toRevoke.code) : undefined}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setToRevoke(null)}>{t("common.cancel")}</Button>
+            <Button variant="danger" disabled={revokeM.isPending} onClick={() => toRevoke && revokeM.mutate(toRevoke)}>{t("billing.vouchers.revoke")}</Button>
+          </>
+        }
+      >
+        <p style={{ margin: 0 }}>{t("billing.vouchers.revokeBody")}</p>
+      </Modal>
+    </>
   );
 }
