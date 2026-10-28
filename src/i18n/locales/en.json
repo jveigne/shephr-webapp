@@ -1193,7 +1193,10 @@
       "citiesManual": "Subscriptions (manual)",
       "citiesVoucher": "Subscriptions (code)",
       "citiesTotal": "Total subscriptions",
-      "mrrHint": "“Combined recurring prices”: sum of the prices of active or past-due subscriptions, manual activations included and annual plans at their annual price. This is not collected monthly revenue."
+      "mrrHint": "“Combined recurring prices”: sum of the prices of active or past-due subscriptions paid online (manual activations and codes excluded), annual plans brought back to a monthly amount (÷ 12). This is not collected monthly revenue.",
+      "mrrIn": "Combined recurring prices ({{currency}})",
+      "collectedIn": "Collected this month ({{currency}})",
+      "perCurrencyHint": "Amounts per currency, never converted: euro and dollar totals are not added together."
     },
     "subs": {
       "search": "Search",
@@ -1284,7 +1287,7 @@
       "priceTtc": "Price incl. VAT (€)",
       "vat": "VAT (%)",
       "currencyPeriod": "Currency · period",
-      "v1Hint": "Euro; the base price is monthly. A plan can also have an annual price.",
+      "v1Hint": "Euro; the base price is monthly. A plan can also have an annual price and fixed prices in dollars.",
       "codeHint": "Lowercase letters, digits and “-”, 3 to 40 characters. Cannot be changed later.",
       "codeImmutable": "The code cannot be changed.",
       "priceFrozenHint": "Changing the price never changes an existing subscription: its price is frozen at sign-up.",
@@ -1315,7 +1318,11 @@
       "localPrice": "Local price (information)",
       "localPriceHint": "Free text shown on the web next to the code field: \"Mobile Money through your relay — …\". Never in the mobile app; no Stripe payment in this currency. Empty = nothing shown.",
       "localPricePlaceholder": "e.g. 1,000 FCFA / month",
-      "localPriceShort": "Local: {{label}}"
+      "localPriceShort": "Local: {{label}}",
+      "usdPrice": "Monthly price USD (incl. VAT)",
+      "usdAnnualPrice": "Annual price USD (incl. VAT)",
+      "usdHint": "Empty = offered in euros only",
+      "usdAnnualNeedsMonthly": "An annual price in dollars requires a monthly price in dollars."
     },
     "promo": {
       "hint": "A code reduces the price by a percentage for the whole life of the subscription, whatever the offer.",
@@ -1363,7 +1370,7 @@
       "BILLING_PAYER_INVALID": "Unknown payer.",
       "BILLING_SUBSCRIPTION_NOT_ACTIVE": "This subscription is not active (canceled, expired or payment not completed).",
       "BILLING_PERIOD_UNSUPPORTED": "This billing period is not offered for this offer (annual requires a plan with an annual price).",
-      "BILLING_CURRENCY_UNSUPPORTED": "Only euros are accepted for now.",
+      "BILLING_CURRENCY_UNSUPPORTED": "This currency is not offered for this offer.",
       "BILLING_OFFER_DUPLICATE": "An offer with this code already exists.",
       "PROMO_CODE_INVALID_PERIOD": "The end of validity must be after the start.",
       "INVALID_PARAMETER": "A field is invalid (past end date, plan field on a non-plan offer, notes over 2,000 characters…).",
@@ -1480,6 +1487,12 @@
         "USED": "Used",
         "REVOKED": "Revoked"
       }
+    },
+    "common": {
+      "currency": "Currency"
+    },
+    "filters": {
+      "allCurrencies": "All currencies"
     }
   },
   "supervision": {

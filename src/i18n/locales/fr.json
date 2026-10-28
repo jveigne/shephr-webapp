@@ -1193,7 +1193,10 @@
       "citiesManual": "Abonnements (manuel)",
       "citiesVoucher": "Abonnements (code)",
       "citiesTotal": "Total des abonnements",
-      "mrrHint": "« Prix récurrents cumulés » : somme des prix des abonnements actifs ou impayés, activations manuelles comprises et formules annuelles à leur prix annuel. Ce n'est pas un revenu mensuel encaissé."
+      "mrrHint": "« Prix récurrents cumulés » : somme des prix des abonnements payés en ligne actifs ou impayés (activations manuelles et codes exclus), formules annuelles ramenées au mois (÷ 12). Ce n'est pas un revenu mensuel encaissé.",
+      "mrrIn": "Prix récurrents cumulés ({{currency}})",
+      "collectedIn": "Encaissé ce mois ({{currency}})",
+      "perCurrencyHint": "Montants par devise, sans conversion : les totaux en euros et en dollars ne s'additionnent pas."
     },
     "subs": {
       "search": "Recherche",
@@ -1284,7 +1287,7 @@
       "priceTtc": "Prix TTC (€)",
       "vat": "TVA (%)",
       "currencyPeriod": "Devise · périodicité",
-      "v1Hint": "Euro ; le prix de base est mensuel. Une formule peut avoir en plus un prix annuel.",
+      "v1Hint": "Euro ; le prix de base est mensuel. Une formule peut avoir en plus un prix annuel et des prix fixes en dollars.",
       "codeHint": "Minuscules, chiffres et « - », 3 à 40 caractères. Ne pourra plus être modifié.",
       "codeImmutable": "Le code ne peut pas être modifié.",
       "priceFrozenHint": "Changer le prix ne modifie jamais un abonnement existant : son prix est figé à la souscription.",
@@ -1315,7 +1318,11 @@
       "localPrice": "Prix local (information)",
       "localPriceHint": "Texte libre affiché sur le web à côté du champ code : « Mobile Money auprès de votre relais — … ». Jamais sur l'app mobile ; aucun paiement Stripe dans cette devise. Vide = rien d'affiché.",
       "localPricePlaceholder": "ex. 1 000 FCFA / mois",
-      "localPriceShort": "Local : {{label}}"
+      "localPriceShort": "Local : {{label}}",
+      "usdPrice": "Prix mensuel USD (TTC)",
+      "usdAnnualPrice": "Prix annuel USD (TTC)",
+      "usdHint": "Vide = offre proposée en euros seulement",
+      "usdAnnualNeedsMonthly": "Un prix annuel en dollars exige un prix mensuel en dollars."
     },
     "promo": {
       "hint": "Un code réduit le prix d'un pourcentage pendant toute la durée de l'abonnement, quelle que soit l'offre.",
@@ -1363,7 +1370,7 @@
       "BILLING_PAYER_INVALID": "Payeur inconnu.",
       "BILLING_SUBSCRIPTION_NOT_ACTIVE": "Cet abonnement n'est pas actif (résilié, expiré ou paiement non abouti).",
       "BILLING_PERIOD_UNSUPPORTED": "Cette périodicité n'est pas proposée pour cette offre (l'annuel exige une formule avec un prix annuel).",
-      "BILLING_CURRENCY_UNSUPPORTED": "Seul l'euro est accepté pour l'instant.",
+      "BILLING_CURRENCY_UNSUPPORTED": "Cette devise n'est pas proposée pour cette offre.",
       "BILLING_OFFER_DUPLICATE": "Une offre porte déjà ce code.",
       "PROMO_CODE_INVALID_PERIOD": "La fin de validité doit être postérieure au début.",
       "INVALID_PARAMETER": "Un champ est invalide (date de fin passée, champ de formule sur une offre sans formule, notes de plus de 2 000 caractères…).",
@@ -1480,6 +1487,12 @@
         "USED": "Utilisé",
         "REVOKED": "Révoqué"
       }
+    },
+    "common": {
+      "currency": "Devise"
+    },
+    "filters": {
+      "allCurrencies": "Toutes les devises"
     }
   },
   "supervision": {

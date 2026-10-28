@@ -26,9 +26,15 @@ import { apiFetch, apiFetchBlob } from "./api";
 export type BillingSubscriptionStatus = "PENDING" | "ACTIVE" | "PAST_DUE" | "CANCELED" | "EXPIRED";
 /**
  * D-ABO-03 — `MONTHLY` pour une offre sans plan. D-ABO-18 (JP 27/10) : `ANNUAL` accepté pour un plan
- * qui a un `annualPriceCents` (sinon 422 `BILLING_PERIOD_UNSUPPORTED`).
+ * qui a un `annualPriceCents` (sinon 422 `BILLING_PERIOD_UNSUPPORTED`) — LOCALITY ou USER depuis D-MKT-03 (JP 28/10).
  */
 export type BillingPeriod = "MONTHLY" | "ANNUAL";
+/**
+ * D-CUR-02 / 04 (JP 28/10) — devises acceptées (miroir de `com.excellence.back.billing.BillingCurrency`). Une autre
+ * valeur → 400. La devise de BASE d'une offre reste EUR ; USD = prix fixes saisis ici, jamais convertis.
+ */
+export type BillingCurrency = "EUR" | "USD";
+export const BILLING_CURRENCIES: BillingCurrency[] = ["EUR", "USD"];
 /**
  * D-ABO-20 (JP 27/10) — `STRIPE` (caisse web) ou `MANUEL` (activé au back-office, RG-ABO-29, aucune facture).
  * D-OFF-08 (JP 27/10) — `VOUCHER` : ouvert ou prolongé par un code saisi sur le web ; droits d'un MANUEL
@@ -100,13 +106,26 @@ export interface AdminBillingOverview {
   activeCount: number;
   pastDueCount: number;
   canceledThisMonth: number;
-  /** Revenu mensuel récurrent (centimes). */
+  /** Revenu mensuel récurrent (centimes) : Stripe seulement (ni MANUEL ni VOUCHER), ANNUAL ÷ 12 (serveur). */
   mrrCents: number;
   collectedThisMonthCents: number;
   currency: string;
   alerts: { reference: string; kind: BillingAlertKind }[];
   /** D-ABO-20 (JP 27/10) — une ligne par offre à `planCode` : abonnements OUVRANT DROIT maintenant, par source. */
   plans: AdminPlanCount[];
+  /**
+   * RG-CUR-17 (D-CUR-06, JP 28/10) — une ligne par devise (EUR d'abord, puis USD dès qu'une offre a un prix USD ou
+   * qu'un abonnement / une facture est en USD), jamais sommées entre elles. Les champs historiques `mrrCents` /
+   * `collectedThisMonthCents` / `currency` = la ligne EUR. Facultatif : absent d'un serveur antérieur au lot.
+   */
+  totals?: CurrencyTotal[];
+}
+
+// Mirrors com.excellence.back.billing.BillingDtos.CurrencyTotal
+export interface CurrencyTotal {
+  currency: BillingCurrency;
+  mrrCents: number;
+  collectedThisMonthCents: number;
 }
 /** Nom du contrat §10.3 (même objet que `AdminBillingOverview`, nom historique de ce dépôt). */
 export type AdminOverview = AdminBillingOverview;
@@ -140,7 +159,10 @@ export interface AdminOffer {
   subscriptionCount: number;
   /** D-ABO-16 (JP 27/10) — code du plan (`[A-Z0-9_]{3,40}`, ex. `EGLISE_VILLE`), null = offre sans plan. Immuable. */
   planCode: string | null;
-  /** D-ABO-18 — prix TTC annuel (centimes), plan seulement ; null = pas d'abonnement annuel. */
+  /**
+   * D-ABO-18 — prix TTC annuel (centimes), plan seulement ; null = pas d'abonnement annuel. D-MKT-03 (JP 28/10) :
+   * accepté aussi pour un plan USER (Caleb annuel, 3 990 cts) — le refus serveur est retiré.
+   */
   annualPriceCents: number | null;
   /** D-ABO-16 — codes de droit (`sub_module.code`) ouverts par le plan, lus en direct ; [] hors plan. */
   entitlementCodes: string[];
@@ -155,11 +177,18 @@ export interface AdminOffer {
    * Stripe. null = rien d'affiché. Absent d'un serveur antérieur au lot.
    */
   localPriceLabel?: string | null;
+  /**
+   * D-CUR-02 (JP 28/10) — prix TTC mensuel en dollars (centimes USD), FIXE (aucune conversion), plan seulement ;
+   * null = offre proposée en euros seulement. Absent d'un serveur antérieur au lot.
+   */
+  usdPriceCents?: number | null;
+  /** D-CUR-02 — prix TTC annuel en dollars (centimes USD) ; exige `usdPriceCents`. null = pas d'annuel en USD. */
+  usdAnnualPriceCents?: number | null;
 }
 
 // Mirrors com.excellence.back.billing.BillingDtos.OfferRequest — tout AdminOffer sauf id / subscriptionCount,
 // champs plan facultatifs.
-export interface OfferRequest extends Omit<AdminOffer, "id" | "subscriptionCount" | "planCode" | "annualPriceCents" | "entitlementCodes" | "planScope" | "localPriceLabel"> {
+export interface OfferRequest extends Omit<AdminOffer, "id" | "subscriptionCount" | "planCode" | "annualPriceCents" | "entitlementCodes" | "planScope" | "localPriceLabel" | "usdPriceCents" | "usdAnnualPriceCents"> {
   /** Création seulement ; différent au PUT → 422 `BILLING_OFFER_CODE_IMMUTABLE`. */
   planCode?: string | null;
   /** D-ABO-31 (JP 27/10) — plan seulement, choisi à la création, immuable (renvoyé tel quel au PUT). */
@@ -170,6 +199,12 @@ export interface OfferRequest extends Omit<AdminOffer, "id" | "subscriptionCount
   entitlementCodes?: string[];
   /** D-OFF-08 (JP 27/10) — texte libre informatif (≤ 80 caractères, `@Size(max = 80)`), null = aucun. */
   localPriceLabel?: string | null;
+  /**
+   * D-CUR-02 / 06 (JP 28/10) — plan seulement (sinon 400 `INVALID_PARAMETER`) ; `null` au PUT = SUPPRIMÉ
+   * (formulaire complet, comme `annualPriceCents`). `usdAnnualPriceCents` sans `usdPriceCents` → 400.
+   */
+  usdPriceCents?: number | null;
+  usdAnnualPriceCents?: number | null;
 }
 
 // Mirrors com.excellence.back.billing.BillingDtos.AdminPromoCode
@@ -251,8 +286,8 @@ export interface ManualSubscriptionRequest {
   offerCode?: string;
   /** D-ABO-31 — plan USER : dirigeant bénéficiaire (devient le payeur). */
   userId?: string;
-  /** Informatif, MONTHLY par défaut. */
-  billingPeriod?: "MONTHLY" | "ANNUAL";
+  /** Informatif, MONTHLY par défaut. D-MKT-03 (JP 28/10) : ANNUAL possible aussi pour un plan USER qui a un prix annuel. */
+  billingPeriod?: BillingPeriod;
   /** `YYYY-MM-DD`, ≥ aujourd'hui (Europe/Paris) — sinon 400 `INVALID_PARAMETER`. */
   manualEndDate: string;
   /** Facultatif ; défaut serveur : le SUPER_ADMIN. */
@@ -371,6 +406,8 @@ export interface SubscriptionQuery {
   localityId?: string;
   /** D-ABO-31 (JP 27/10) — portée du plan ; vide = toutes. */
   planScope?: PlanScope | "";
+  /** RG-CUR-16 (D-CUR-06, JP 28/10) — devise de l'abonnement ; vide = toutes. */
+  currency?: BillingCurrency | "";
   page?: number;
   size?: number;
 }
@@ -379,7 +416,7 @@ export function listBillingSubscriptions(q: SubscriptionQuery): Promise<BillingP
     `${BASE}/subscriptions${qs({
       status: q.status, ministryId: q.ministryId, search: q.search?.trim(),
       planCode: q.planCode, source: q.source, localityId: q.localityId,
-      planScope: q.planScope, page: q.page ?? 0, size: q.size ?? 25 })}`,
+      planScope: q.planScope, currency: q.currency, page: q.page ?? 0, size: q.size ?? 25 })}`,
   );
 }
 /**
@@ -417,12 +454,14 @@ export interface InvoiceQuery {
   /** `YYYY-MM-DD`, inclus. */
   to?: string;
   search?: string;
+  /** RG-CUR-16 (D-CUR-06, JP 28/10) — devise de la facture ; vide = toutes. */
+  currency?: BillingCurrency | "";
   page?: number;
   size?: number;
 }
 export function listInvoices(q: InvoiceQuery): Promise<BillingPage<AdminInvoice>> {
   return apiFetch<BillingPage<AdminInvoice>>(
-    `${BASE}/invoices${qs({ from: q.from, to: q.to, search: q.search?.trim(), page: q.page ?? 0, size: q.size ?? 25 })}`,
+    `${BASE}/invoices${qs({ from: q.from, to: q.to, search: q.search?.trim(), currency: q.currency, page: q.page ?? 0, size: q.size ?? 25 })}`,
   );
 }
 export function downloadInvoicePdf(number: string): Promise<{ blob: Blob; filename: string }> {
@@ -432,10 +471,13 @@ export function downloadInvoicePdf(number: string): Promise<{ blob: Blob; filena
 export function resendInvoice(number: string): Promise<unknown> {
   return apiFetch<unknown>(`${BASE}/invoices/${encodeURIComponent(number)}/resend`, { method: "POST" });
 }
-/** D-ABO-09 — export comptable CSV (`;`, décimales `,`, BOM). */
-export function exportInvoicesCsv(from?: string, to?: string): Promise<{ blob: Blob; filename: string }> {
-  const name = `factures${from ? `-${from}` : ""}${to ? `-${to}` : ""}.csv`;
-  return apiFetchBlob(`${BASE}/invoices/export.csv${qs({ from, to })}`, name);
+/**
+ * D-ABO-09 — export comptable CSV (`;`, décimales `,`, BOM). RG-CUR-16 (D-CUR-06, JP 28/10) : `currency` filtre
+ * l'export comme la liste (absent = toutes) ; le nom du fichier porte la devise filtrée (`factures-USD-….csv`).
+ */
+export function exportInvoicesCsv(from?: string, to?: string, currency?: BillingCurrency): Promise<{ blob: Blob; filename: string }> {
+  const name = `factures${currency ? `-${currency}` : ""}${from ? `-${from}` : ""}${to ? `-${to}` : ""}.csv`;
+  return apiFetchBlob(`${BASE}/invoices/export.csv${qs({ from, to, currency })}`, name);
 }
 
 // ---------- Vouchers — D-OFF-08 (JP 27/10, lot « Offres Caleb / Néhémie », §3.6 + §4) ----------

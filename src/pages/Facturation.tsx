@@ -40,6 +40,7 @@ import {
   revokeVoucher,
   updateOffer,
   updatePromoCode,
+  BILLING_CURRENCIES,
   type AdminInvoice,
   type AdminOffer,
   type AdminPlanCount,
@@ -47,6 +48,7 @@ import {
   type AdminSubscription,
   type AdminSubscriptionPatch,
   type BillingAddress,
+  type BillingCurrency,
   type BillingPeriod,
   type BillingSource,
   type BillingSubscriptionStatus,
@@ -345,11 +347,23 @@ function OverviewTab({ onOpenReference }: { onOpenReference: (ref: string) => vo
   if (q.isError || !q.data) return <div style={{ color: "var(--ink-500)" }}>{errMsg(t, q.error)}</div>;
   const o = q.data;
 
+  // RG-CUR-17 (D-CUR-06, JP 28/10) — MRR et encaissé : UNE tuile par devise (`totals`, EUR d'abord), jamais de
+  // somme ni de conversion entre devises. Serveur antérieur au lot (sans `totals`) : la ligne historique (EUR).
+  const totals = o.totals && o.totals.length > 0
+    ? o.totals
+    : [{ currency: (o.currency || "EUR") as BillingCurrency, mrrCents: o.mrrCents, collectedThisMonthCents: o.collectedThisMonthCents }];
+  const multi = totals.length > 1;
   const kpis = [
     { lbl: t("billing.overview.active"), val: String(o.activeCount) },
     { lbl: t("billing.overview.pastDue"), val: String(o.pastDueCount) },
-    { lbl: t("billing.overview.mrr"), val: money(o.mrrCents, o.currency, locale) },
-    { lbl: t("billing.overview.collected"), val: money(o.collectedThisMonthCents, o.currency, locale) },
+    ...totals.map((c) => ({
+      lbl: multi ? t("billing.overview.mrrIn", { currency: c.currency }) : t("billing.overview.mrr"),
+      val: money(c.mrrCents, c.currency, locale),
+    })),
+    ...totals.map((c) => ({
+      lbl: multi ? t("billing.overview.collectedIn", { currency: c.currency }) : t("billing.overview.collected"),
+      val: money(c.collectedThisMonthCents, c.currency, locale),
+    })),
   ];
 
   return (
@@ -363,9 +377,11 @@ function OverviewTab({ onOpenReference }: { onOpenReference: (ref: string) => vo
           </div>
         ))}
       </div>
-      {/* Revue PP-O1 (27/10) — le serveur additionne `priceCents` de tout abonnement ACTIVE / PAST_DUE, MANUEL
-          compris et ANNUAL non ramené au mois : la tuile dit ce qu'elle compte (correctif serveur à trancher). */}
+      {/* Revue PP-O1 (27/10) — la tuile dit ce qu'elle compte. D-MKT-03, JP 28/10 : texte aligné sur le serveur
+          (`monthlyRecurringCents`) — ACTIVE / PAST_DUE prélevés seulement (ni MANUEL ni VOUCHER), ANNUAL ÷ 12
+          (Caleb annuel compris). */}
       <div style={{ color: "var(--ink-500)", fontSize: 12.5 }}>{t("billing.overview.mrrHint")}</div>
+      {multi && <div style={{ color: "var(--ink-500)", fontSize: 12.5 }}>{t("billing.overview.perCurrencyHint")}</div>}
       <div style={{ color: "var(--ink-500)", fontSize: 13.5 }}>
         {t("billing.overview.canceledThisMonth", { count: o.canceledThisMonth })}
       </div>
@@ -432,13 +448,15 @@ function SubscriptionsTab({ initialSearch }: { initialSearch: string }) {
   const [localityId, setLocalityId] = useState("");
   // D-ABO-31 (JP 27/10) — filtre Portée (Ville / Dirigeant).
   const [planScope, setPlanScope] = useState<PlanScope | "">("");
+  // RG-CUR-16 (D-CUR-06, JP 28/10) — filtre Devise (vide = toutes).
+  const [currency, setCurrency] = useState<BillingCurrency | "">("");
   const [search, setSearch] = useState(initialSearch);
   const [page, setPage] = useState(1);
   const [openId, setOpenId] = useState<string | null>(null);
   const [manualOpen, setManualOpen] = useState(false);
   const debounced = useDebounced(search);
 
-  useEffect(() => { setPage(1); }, [status, ministryId, planCode, source, localityId, planScope, debounced]);
+  useEffect(() => { setPage(1); }, [status, ministryId, planCode, source, localityId, planScope, currency, debounced]);
   // Une ville n'a de sens que pour la portée Ville.
   useEffect(() => { if (planScope === "USER") setLocalityId(""); }, [planScope]);
   useEffect(() => { setLocalityId(""); }, [ministryId]);
@@ -452,9 +470,9 @@ function SubscriptionsTab({ initialSearch }: { initialSearch: string }) {
   });
   const planOffers = (offersQ.data ?? []).filter((o) => !!o.planCode);
   const listQ = useQuery({
-    queryKey: ["billing", "subscriptions", status, ministryId, planCode, source, localityId, planScope, debounced, page],
+    queryKey: ["billing", "subscriptions", status, ministryId, planCode, source, localityId, planScope, currency, debounced, page],
     queryFn: () => listBillingSubscriptions({
-      status, ministryId, planCode, source, localityId, planScope, search: debounced, page: page - 1, size: PAGE_SIZE,
+      status, ministryId, planCode, source, localityId, planScope, currency, search: debounced, page: page - 1, size: PAGE_SIZE,
     }),
   });
 
@@ -491,6 +509,12 @@ function SubscriptionsTab({ initialSearch }: { initialSearch: string }) {
           <Select value={source} onChange={(e) => setSource(e.target.value as BillingSource | "")}>
             <option value="">{t("billing.all")}</option>
             {SOURCES.map((x) => <option key={x} value={x}>{t(`billing.source.${x}`)}</option>)}
+          </Select>
+        </Field>
+        <Field label={t("billing.common.currency")}>
+          <Select value={currency} onChange={(e) => setCurrency(e.target.value as BillingCurrency | "")}>
+            <option value="">{t("billing.filters.allCurrencies")}</option>
+            {BILLING_CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
           </Select>
         </Field>
         <Field label={t("billing.subs.ministry")}>
@@ -562,6 +586,8 @@ function SubscriptionsTab({ initialSearch }: { initialSearch: string }) {
               },
               { label: t("billing.subs.source"), render: (s: AdminSubscription) => <SourceBadge source={s.source} /> },
               { label: t("billing.subs.period"), render: (s: AdminSubscription) => t(`billing.period.${s.billingPeriod}`) },
+              // D-CUR-06 (JP 28/10) — devise figée de l'abonnement (instantané, RG-CUR-08).
+              { label: t("billing.common.currency"), render: (s: AdminSubscription) => <code>{s.currency}</code> },
               {
                 label: t("billing.subs.price"),
                 render: (s: AdminSubscription) => (
@@ -599,7 +625,8 @@ function SubscriptionsTab({ initialSearch }: { initialSearch: string }) {
  * payeur facultatif (ville seulement) → notes. Source MANUEL, aucune facture (D-ABO-24). RG-ABO-30 : 422
  * SUBSCRIPTION_ALREADY_ACTIVE si la ville / le dirigeant a déjà un abonnement non résilié pour ce plan.
  * D-ABO-31 — plan USER : le dirigeant choisi EST le payeur (bénéficiaire), pas de ville (localityId interdit,
- * 422 PERSONAL_PLAN_LOCALITY_FORBIDDEN), mensuel seulement ; la recherche ne propose que les dirigeants.
+ * 422 PERSONAL_PLAN_LOCALITY_FORBIDDEN) ; la recherche ne propose que les dirigeants. « Mensuel seulement »
+ * (D-ABO-35) levé par D-MKT-03, JP 28/10 : « Annuel » est proposé dès que l'offre a un `annualPriceCents`.
  */
 function ManualActivationModal({
   planOffers, offersLoading, offersError, onClose, onCreated,
@@ -654,7 +681,8 @@ function ManualActivationModal({
       const body: ManualSubscriptionRequest = isUser
         // D-ABO-31 (JP 27/10) — plan USER : { offerCode, userId, manualEndDate, notes } ; jamais de ville.
         ? {
-          offerCode: plan!.code, planCode, userId: leaderId, billingPeriod: "MONTHLY", manualEndDate: endDate,
+          // D-MKT-03, JP 28/10 — la période choisie part aussi pour un plan USER (Caleb annuel).
+          offerCode: plan!.code, planCode, userId: leaderId, billingPeriod: period, manualEndDate: endDate,
           notes: notes.trim() || null,
         }
         : {
@@ -710,7 +738,8 @@ function ManualActivationModal({
             <Field label={t("billing.subs.period")} hint={price != null ? `${money(price, plan?.currency ?? "EUR", locale)} ${t(`billing.per.${period}`)} · ${t("billing.manual.priceHint")}` : undefined}>
               <Select value={period} onChange={(e) => setPeriod(e.target.value as BillingPeriod)}>
                 <option value="MONTHLY">{t("billing.period.MONTHLY")}</option>
-                {!isUser && plan?.annualPriceCents != null && <option value="ANNUAL">{t("billing.period.ANNUAL")}</option>}
+                {/* D-MKT-03, JP 28/10 — plus de « !isUser » : un plan personnel peut avoir un prix annuel. */}
+                {plan?.annualPriceCents != null && <option value="ANNUAL">{t("billing.period.ANNUAL")}</option>}
               </Select>
             </Field>
             <Field label={t("billing.manual.endDate")} hint={t("billing.manual.endDateHint")}>
@@ -1062,14 +1091,16 @@ function InvoicesTab() {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [search, setSearch] = useState("");
+  // RG-CUR-16 (D-CUR-06, JP 28/10) — filtre Devise (vide = toutes), repris par l'export CSV.
+  const [currency, setCurrency] = useState<BillingCurrency | "">("");
   const [page, setPage] = useState(1);
   const debounced = useDebounced(search);
 
-  useEffect(() => { setPage(1); }, [from, to, debounced]);
+  useEffect(() => { setPage(1); }, [from, to, currency, debounced]);
 
   const listQ = useQuery({
-    queryKey: ["billing", "invoices", from, to, debounced, page],
-    queryFn: () => listInvoices({ from, to, search: debounced, page: page - 1, size: PAGE_SIZE }),
+    queryKey: ["billing", "invoices", from, to, currency, debounced, page],
+    queryFn: () => listInvoices({ from, to, search: debounced, currency, page: page - 1, size: PAGE_SIZE }),
   });
 
   const resendM = useMutation({
@@ -1090,9 +1121,15 @@ function InvoicesTab() {
         <Field label={t("billing.subs.search")}>
           <Input icon={<Icons.Search size={14} />} placeholder={t("billing.invoices.searchPlaceholder")} value={search} onChange={(e) => setSearch(e.target.value)} />
         </Field>
+        <Field label={t("billing.common.currency")}>
+          <Select value={currency} onChange={(e) => setCurrency(e.target.value as BillingCurrency | "")}>
+            <option value="">{t("billing.filters.allCurrencies")}</option>
+            {BILLING_CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+          </Select>
+        </Field>
         <div style={{ marginLeft: "auto", paddingBottom: 6 }}>
           <Button variant="primary" size="sm" iconL={<Icons.Export size={15} />}
-            onClick={() => download(() => exportInvoicesCsv(from || undefined, to || undefined))}>
+            onClick={() => download(() => exportInvoicesCsv(from || undefined, to || undefined, currency || undefined))}>
             {t("billing.invoices.exportCsv")}
           </Button>
         </div>
@@ -1121,6 +1158,8 @@ function InvoicesTab() {
                 ),
               },
               { label: t("billing.subs.ministry"), render: (i: AdminInvoice) => i.ministryName ?? "—" },
+              // D-CUR-06 (JP 28/10) — devise de la facture (celle reçue de Stripe, RG-CUR-13).
+              { label: t("billing.common.currency"), render: (i: AdminInvoice) => <code>{i.currency}</code> },
               {
                 label: t("billing.subs.offer"),
                 render: (i: AdminInvoice) => (
@@ -1185,10 +1224,13 @@ interface OfferForm {
   planScope: PlanScope;
   /** D-OFF-08 (JP 27/10) — prix local informatif (ex. « 1 000 FCFA / mois »), plan seulement. */
   localPriceLabel: string;
+  /** D-CUR-02 / 06 (JP 28/10) — prix USD fixes (décimaux saisis), plan seulement ; vide = proposée en EUR seulement. */
+  usdPrice: string; usdAnnualPrice: string;
 }
 const OFFER_EMPTY: OfferForm = {
   code: "", name: "", nameEn: "", description: "", descriptionEn: "", price: "", vatRate: "20", displayOrder: "0", active: true,
   isPlan: false, planCode: "", annualPrice: "", entitlementCodes: [], planScope: "LOCALITY", localPriceLabel: "",
+  usdPrice: "", usdAnnualPrice: "",
 };
 /** D-OFF-08 — longueur maximale du prix local (texte libre affiché à côté du champ code, web). */
 const LOCAL_PRICE_MAX = 80; // = @Size(max = 80) de OfferRequest.localPriceLabel (bil_offer.local_price_label VARCHAR(80))
@@ -1221,15 +1263,24 @@ function OffersTab() {
       entitlementCodes: o.entitlementCodes ?? [],
       planScope: offerScope(o) ?? "LOCALITY",
       localPriceLabel: o.localPriceLabel ?? "",
+      usdPrice: o.usdPriceCents != null ? (o.usdPriceCents / 100).toFixed(2) : "",
+      usdAnnualPrice: o.usdAnnualPriceCents != null ? (o.usdAnnualPriceCents / 100).toFixed(2) : "",
     });
   };
 
   const priceCents = parseCents(form.price);
   const vatRate = Number(form.vatRate.replace(",", "."));
   const annualCents = form.annualPrice.trim() === "" ? null : parseCents(form.annualPrice);
+  // D-CUR-02 (JP 28/10) — prix USD saisis tels quels (aucune conversion) ; l'annuel USD exige le mensuel USD
+  // (même règle que le CHECK `ck_bil_offer_usd_annual_price` et le 400 du serveur).
+  const usdCents = form.usdPrice.trim() === "" ? null : parseCents(form.usdPrice);
+  const usdAnnualCents = form.usdAnnualPrice.trim() === "" ? null : parseCents(form.usdAnnualPrice);
+  const usdValid = (usdCents === null || (Number.isFinite(usdCents) && usdCents > 0))
+    && (usdAnnualCents === null || (Number.isFinite(usdAnnualCents) && usdAnnualCents > 0 && usdCents !== null));
   const planValid = !form.isPlan || (
     PLAN_CODE_RE.test(form.planCode) && form.entitlementCodes.length > 0
     && (annualCents === null || (Number.isFinite(annualCents) && annualCents > 0))
+    && usdValid
     && form.localPriceLabel.trim().length <= LOCAL_PRICE_MAX
   );
   const valid = OFFER_CODE_RE.test(form.code) && form.name.trim() !== "" && priceCents > 0 && Number.isFinite(vatRate) && vatRate >= 0 && planValid;
@@ -1238,7 +1289,8 @@ function OffersTab() {
 
   const saveM = useMutation({
     mutationFn: () => {
-      // D-ABO-03 — EUR ; prix de base MENSUEL. D-ABO-18 (JP 27/10) : le prix annuel est un champ à part, plan seulement.
+      // D-ABO-03 — EUR ; prix de base MENSUEL. D-ABO-18 (JP 27/10) : le prix annuel est un champ à part, plan seulement
+      // (LOCALITY ou USER depuis D-MKT-03, JP 28/10 — aucun blocage pour un plan personnel).
       const req: OfferRequest = {
         code: form.code, name: form.name.trim(), nameEn: form.nameEn.trim() || null,
         description: form.description.trim() || null, descriptionEn: form.descriptionEn.trim() || null,
@@ -1252,6 +1304,9 @@ function OffersTab() {
         entitlementCodes: form.isPlan ? form.entitlementCodes : undefined,
         // D-OFF-08 (JP 27/10) — information seulement (aucune devise FCFA dans Stripe) ; vide = null.
         localPriceLabel: form.isPlan ? (form.localPriceLabel.trim() || null) : null,
+        // D-CUR-02 / 06 (JP 28/10) — plan seulement ; null = supprimé au PUT (offre proposée en EUR seulement).
+        usdPriceCents: form.isPlan ? usdCents : null,
+        usdAnnualPriceCents: form.isPlan && usdCents !== null ? usdAnnualCents : null,
       };
       return editing === "new" ? createOffer(req) : updateOffer((editing as AdminOffer).id, req);
     },
@@ -1314,6 +1369,13 @@ function OffersTab() {
                   <div>{`${money(o.priceCents, o.currency, locale)} ${t("billing.ttc")} ${t(`billing.per.${o.billingPeriod}`)}`}</div>
                   {o.annualPriceCents != null && (
                     <div style={{ fontSize: 12.5, color: "var(--ink-500)" }}>{`${money(o.annualPriceCents, o.currency, locale)} ${t("billing.ttc")} ${t("billing.per.ANNUAL")}`}</div>
+                  )}
+                  {/* D-CUR-02 (JP 28/10) — prix USD fixes, en dollars tels que saisis. */}
+                  {o.usdPriceCents != null && (
+                    <div style={{ fontSize: 12.5, color: "var(--ink-500)" }}>{`${money(o.usdPriceCents, "USD", locale)} ${t("billing.ttc")} ${t("billing.per.MONTHLY")}`}</div>
+                  )}
+                  {o.usdAnnualPriceCents != null && (
+                    <div style={{ fontSize: 12.5, color: "var(--ink-500)" }}>{`${money(o.usdAnnualPriceCents, "USD", locale)} ${t("billing.ttc")} ${t("billing.per.ANNUAL")}`}</div>
                   )}
                   {o.localPriceLabel && (
                     <div style={{ fontSize: 12.5, color: "var(--ink-500)" }}>{t("billing.offers.localPriceShort", { label: o.localPriceLabel })}</div>
@@ -1413,6 +1475,20 @@ function OffersTab() {
                     <Input inputMode="decimal" value={form.annualPrice} onChange={(e) => setForm({ ...form, annualPrice: e.target.value })} />
                   </Field>
                 </div>
+                {/* D-CUR-02 / 06 (JP 28/10) — prix USD fixes (aucune conversion) ; vides = offre proposée en euros seulement. */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  <Field label={t("billing.offers.usdPrice")}
+                    hint={usdCents != null && Number.isFinite(usdCents) && usdCents > 0 ? `${money(usdCents, "USD", locale)} ${t("billing.per.MONTHLY")}` : t("billing.offers.usdHint")}>
+                    <Input inputMode="decimal" value={form.usdPrice} onChange={(e) => setForm({ ...form, usdPrice: e.target.value })} />
+                  </Field>
+                  <Field label={t("billing.offers.usdAnnualPrice")}
+                    hint={usdAnnualCents != null && Number.isFinite(usdAnnualCents) && usdAnnualCents > 0 ? `${money(usdAnnualCents, "USD", locale)} ${t("billing.per.ANNUAL")}` : t("billing.offers.annualHint")}>
+                    <Input inputMode="decimal" value={form.usdAnnualPrice} onChange={(e) => setForm({ ...form, usdAnnualPrice: e.target.value })} />
+                  </Field>
+                </div>
+                {usdAnnualCents !== null && usdCents === null && (
+                  <div style={{ fontSize: 12.5, color: "var(--err)", marginTop: -6 }}>{t("billing.offers.usdAnnualNeedsMonthly")}</div>
+                )}
                 {/* D-OFF-08 (JP 27/10) — prix local : texte libre, INFORMATION seulement, affiché sur le web à côté du
                     champ code (« Mobile Money auprès de votre relais — … »). Jamais sur mobile. */}
                 <Field label={t("billing.offers.localPrice")} hint={t("billing.offers.localPriceHint")}>
