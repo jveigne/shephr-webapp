@@ -922,7 +922,11 @@
     "contactWhatsappInvalid": "Numéro invalide : uniquement des chiffres, sans « + » ni espace.",
     "contactSaved": "Coordonnées mises à jour",
     "contactSaveFailed": "Enregistrement impossible",
-    "contactLoadFailed": "Chargement des coordonnées impossible"
+    "contactLoadFailed": "Chargement des coordonnées impossible",
+    "contactPaymentWhatsappLabel": "WhatsApp Mobile Money (paiement des offres)",
+    "contactPaymentWhatsappHelp": "Facultatif. Format international sans « + » ni espace (ex. 237612345678). Vide : le bouton Mobile Money est masqué sur /offres.",
+    "contactPaymentWhatsappInvalid": "Numéro invalide : 8 à 15 chiffres, sans « + » ni espace.",
+    "contactPaymentWhatsappRemove": "Retirer"
   },
   "placeholder": {
     "comingSoon": "Écran back-office à venir",

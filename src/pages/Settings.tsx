@@ -198,6 +198,10 @@ function ContactSettingsCard() {
   const { t } = useTranslation();
   const [email, setEmail] = useState("");
   const [whatsapp, setWhatsapp] = useState("");
+  // D-PAY-03, JP 28/10 : numéro du relais Mobile Money (facultatif) et sa valeur enregistrée,
+  // pour savoir si « Retirer » a un sens.
+  const [payment, setPayment] = useState("");
+  const [savedPayment, setSavedPayment] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -208,6 +212,8 @@ function ContactSettingsCard() {
         if (!alive) return;
         setEmail(s.email);
         setWhatsapp(s.whatsappNumber);
+        setPayment(s.paymentWhatsappNumber ?? "");
+        setSavedPayment(s.paymentWhatsappNumber ?? null);
       })
       .catch((e: Error) => push({ kind: "error", title: t("settings.contactLoadFailed"), msg: e.message }))
       .finally(() => alive && setLoading(false));
@@ -219,14 +225,24 @@ function ContactSettingsCard() {
   // l'appel plutôt que de laisser l'utilisateur découvrir une 400.
   const whatsappValid = /^\d{6,20}$/.test(whatsapp.trim());
   const emailValid = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim());
-  const canSave = !loading && !saving && emailValid && whatsappValid;
+  // RG-PAY-21, JP 28/10 : même règle que le serveur (`(\d{8,15})?`) — vide autorisé (= supprimé).
+  const paymentTrimmed = payment.trim();
+  const paymentValid = paymentTrimmed === "" || /^\d{8,15}$/.test(paymentTrimmed);
+  const canSave = !loading && !saving && emailValid && whatsappValid && paymentValid;
 
-  const save = async () => {
+  // Le champ Mobile Money est toujours envoyé : vide → `""`, que le serveur lit comme « supprimé ».
+  const save = async (paymentValue: string = paymentTrimmed) => {
     setSaving(true);
     try {
-      const saved = await updateContactSettings({ email: email.trim(), whatsappNumber: whatsapp.trim() });
+      const saved = await updateContactSettings({
+        email: email.trim(),
+        whatsappNumber: whatsapp.trim(),
+        paymentWhatsappNumber: paymentValue,
+      });
       setEmail(saved.email);
       setWhatsapp(saved.whatsappNumber);
+      setPayment(saved.paymentWhatsappNumber ?? "");
+      setSavedPayment(saved.paymentWhatsappNumber ?? null);
       push({ kind: "ok", title: t("settings.contactSaved") });
     } catch (e) {
       push({ kind: "error", title: t("settings.contactSaveFailed"), msg: (e as Error).message });
@@ -268,11 +284,43 @@ function ContactSettingsCard() {
           {t("settings.contactWhatsappInvalid")}
         </div>
       )}
+      {/* D-PAY-03, JP 28/10 : numéro WhatsApp du relais Mobile Money (paiement des offres sur /offres).
+          Facultatif et distinct du numéro de support (RG-PAY-20) ; vide = bouton masqué (RG-PAY-22). */}
+      <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid var(--line-soft)" }}>
+        <Field label={t("settings.contactPaymentWhatsappLabel")} hint={t("settings.contactPaymentWhatsappHelp")}>
+          <Input
+            value={payment}
+            onChange={(e) => setPayment(e.target.value)}
+            placeholder="237612345678"
+            icon={<Icons.Hash size={14} />}
+            disabled={loading}
+          />
+        </Field>
+        {!loading && !paymentValid && (
+          <div style={{ color: "var(--err, #B86A4A)", fontSize: 12.5, marginTop: 8 }}>
+            {t("settings.contactPaymentWhatsappInvalid")}
+          </div>
+        )}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 8 }}>
+          <span style={{ fontSize: 12.5, color: "var(--ink-400)" }}>
+            {paymentTrimmed !== "" && paymentValid ? `https://wa.me/${paymentTrimmed}` : ""}
+          </span>
+          {savedPayment && (
+            <Button
+              variant="ghost"
+              disabled={loading || saving || !emailValid || !whatsappValid}
+              onClick={() => save("")}
+            >
+              {t("settings.contactPaymentWhatsappRemove")}
+            </Button>
+          )}
+        </div>
+      </div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 18 }}>
         <span style={{ fontSize: 12.5, color: "var(--ink-400)" }}>
           {whatsappValid ? `https://wa.me/${whatsapp.trim()}` : ""}
         </span>
-        <Button variant="primary" disabled={!canSave} onClick={save}>
+        <Button variant="primary" disabled={!canSave} onClick={() => save()}>
           {saving ? t("common.saving") : t("common.save")}
         </Button>
       </div>

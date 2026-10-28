@@ -922,7 +922,11 @@
     "contactWhatsappInvalid": "Invalid number: digits only, no “+” and no spaces.",
     "contactSaved": "Contact details updated",
     "contactSaveFailed": "Could not save",
-    "contactLoadFailed": "Could not load contact details"
+    "contactLoadFailed": "Could not load contact details",
+    "contactPaymentWhatsappLabel": "Mobile Money WhatsApp (offer payments)",
+    "contactPaymentWhatsappHelp": "Optional. International format without “+” or spaces (e.g. 237612345678). Empty: the Mobile Money button is hidden on /offres.",
+    "contactPaymentWhatsappInvalid": "Invalid number: 8 to 15 digits, no “+” and no spaces.",
+    "contactPaymentWhatsappRemove": "Remove"
   },
   "placeholder": {
     "comingSoon": "Back-office screen coming soon",
