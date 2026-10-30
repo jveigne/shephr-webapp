@@ -196,6 +196,9 @@ export default function AbonnementsPage() {
     enabled: !!ministryId,
   });
   const excluded = useMemo(() => new Set((exclusionsQ.data ?? []).map((x) => x.moduleCode)), [exclusionsQ.data]);
+  // D-FIX-1B, JP 29/10 (constat B-02 clos, voulu) : l'interrupteur vaut pour TOUT module gratuit, GOALS et STUDY
+  // compris (et non les seuls ASSEMBLY / EVENTS / DOCUMENTS / MEMBER_CARE de D-OFF-01) — le serveur accepte l'exclusion
+  // de tout module `free` (AdminModuleExclusionService) et `@RequiresModule("GOALS" | "STUDY")` répond alors 403.
   const freeModules = (modulesQ.data ?? []).filter((m) => m.free);
   const exclusionM = useMutation({
     mutationFn: async (v: { code: string; enabledForMinistry: boolean }): Promise<void> => {

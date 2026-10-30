@@ -1322,7 +1322,8 @@
       "usdPrice": "Prix mensuel USD (TTC)",
       "usdAnnualPrice": "Prix annuel USD (TTC)",
       "usdHint": "Vide = offre proposée en euros seulement",
-      "usdAnnualNeedsMonthly": "Un prix annuel en dollars exige un prix mensuel en dollars."
+      "usdAnnualNeedsMonthly": "Un prix annuel en dollars exige un prix mensuel en dollars.",
+      "usdAnnualNeedsEurAnnual": "Un prix annuel en dollars exige un prix annuel en euros : sans lui, la formule annuelle en dollars serait refusée à la caisse."
     },
     "promo": {
       "hint": "Un code réduit le prix d'un pourcentage pendant toute la durée de l'abonnement, quelle que soit l'offre.",
@@ -1416,13 +1417,16 @@
       "createdToast": "Formule activée",
       "extendTitle": "Prolonger",
       "extend": "Prolonger",
-      "extendHint": "Nouvelle date de fin, incluse ; aujourd'hui au plus tôt.",
+      "extendHint": "Nouvelle date de fin, incluse ; postérieure à la fin actuelle.",
+      "extendAfterEnd": "Choisissez une date à partir du {{date}} : prolonger ne raccourcit jamais un abonnement.",
       "extendReactivates": "Prolonger réactive cet abonnement (refusé si la ville ou le dirigeant a déjà un autre abonnement en cours pour cette formule).",
       "end": "Mettre fin",
       "endTitle": "Mettre fin à l'activation manuelle",
       "endAtTerm": "À la date de fin",
       "endBody": "« À la date de fin » : la ville garde ses droits jusqu'au {{date}} inclus. « Immédiatement » : les droits se ferment tout de suite.",
       "endedToast": "Activation manuelle terminée",
+      "endTitleVoucher": "Mettre fin à l'abonnement ouvert par un voucher",
+      "endedToastVoucher": "Abonnement voucher terminé",
       "endBodyCanceled": "Les droits courent jusqu'au {{date}} inclus ; « Immédiatement » les ferme tout de suite.",
       "subUser": "Sans paiement en ligne (virement, accord) : aucune facture n'est émise. Formule personnelle : le dirigeant choisi accède aux statistiques de sa hiérarchie jusqu'à la date de fin incluse.",
       "leader": "Dirigeant bénéficiaire",
@@ -1481,7 +1485,7 @@
       "revokeTitle": "Révoquer ce code",
       "revokeBody": "Le code ne pourra plus être saisi. Un code déjà utilisé ne se révoque pas : l'abonnement qu'il a ouvert se gère depuis l'onglet Abonnements.",
       "revokedToast": "Code révoqué",
-      "subscriptionHint": "Ouvert par un voucher : droits jusqu'à la date de fin incluse, aucune facture. Il se prolonge quand un nouveau code de la même offre est saisi.",
+      "subscriptionHint": "Ouvert par un voucher : droits jusqu'à la date de fin incluse, aucune facture. Il se prolonge quand un nouveau code de la même offre est saisi, ou d'ici (« Prolonger »).",
       "status": {
         "ACTIVE": "Disponible",
         "USED": "Utilisé",
@@ -1493,6 +1497,33 @@
     },
     "filters": {
       "allCurrencies": "Toutes les devises"
+    },
+    "expiring": {
+      "tab": "Expirent bientôt",
+      "windowLabel": "Délai",
+      "window": "Dans les {{days}} jours",
+      "hint": "Offres Caleb et Néhémie : fin manuelle (Manuel, Voucher), fin de période (Stripe résilié), fin de grâce (impayé). Dates Europe/Paris.",
+      "col": {
+        "beneficiary": "Bénéficiaire",
+        "offer": "Offre",
+        "type": "Type",
+        "endDate": "Date de fin",
+        "daysLeft": "Jours restants",
+        "reminder": "Rappel envoyé"
+      },
+      "kind": {
+        "MANUAL_END": "Fin manuelle",
+        "PERIOD_END": "Fin de période",
+        "GRACE_END": "Fin de grâce"
+      },
+      "lastDay": "Dernier jour",
+      "daysCount_one": "{{count}} jour",
+      "daysCount_other": "{{count}} jours",
+      "empty": "Aucun abonnement n'expire dans cette période.",
+      "extend": "Prolonger",
+      "extendTitle": "Prolonger l'abonnement",
+      "currentEnd": "Fin actuelle : {{date}}",
+      "extendedToast": "Abonnement prolongé"
     }
   },
   "supervision": {

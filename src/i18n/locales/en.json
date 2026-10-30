@@ -1322,7 +1322,8 @@
       "usdPrice": "Monthly price USD (incl. VAT)",
       "usdAnnualPrice": "Annual price USD (incl. VAT)",
       "usdHint": "Empty = offered in euros only",
-      "usdAnnualNeedsMonthly": "An annual price in dollars requires a monthly price in dollars."
+      "usdAnnualNeedsMonthly": "An annual price in dollars requires a monthly price in dollars.",
+      "usdAnnualNeedsEurAnnual": "An annual price in dollars requires an annual price in euros: without it, the annual dollar plan would be refused at checkout."
     },
     "promo": {
       "hint": "A code reduces the price by a percentage for the whole life of the subscription, whatever the offer.",
@@ -1416,13 +1417,16 @@
       "createdToast": "Plan activated",
       "extendTitle": "Extend",
       "extend": "Extend",
-      "extendHint": "New end date, inclusive; today at the earliest.",
+      "extendHint": "New end date, inclusive; after the current end.",
+      "extendAfterEnd": "Choose a date from {{date}} onwards: extending never shortens a subscription.",
       "extendReactivates": "Extending reactivates this subscription (refused if the city or the leader already has another ongoing subscription for this plan).",
       "end": "End",
       "endTitle": "End the manual activation",
       "endAtTerm": "On the end date",
       "endBody": "“On the end date”: the city keeps its entitlements until {{date}} inclusive. “Immediately”: entitlements close right away.",
       "endedToast": "Manual activation ended",
+      "endTitleVoucher": "End the voucher subscription",
+      "endedToastVoucher": "Voucher subscription ended",
       "endBodyCanceled": "Entitlements run until {{date}} inclusive; “Immediately” closes them right away.",
       "subUser": "No online payment (bank transfer, agreement): no invoice is issued. Personal plan: the chosen leader gets their hierarchy statistics until the end date, inclusive.",
       "leader": "Beneficiary leader",
@@ -1481,7 +1485,7 @@
       "revokeTitle": "Revoke this code",
       "revokeBody": "The code can no longer be entered. A used code cannot be revoked: the subscription it opened is managed from the Subscriptions tab.",
       "revokedToast": "Code revoked",
-      "subscriptionHint": "Opened by a voucher: entitlements until the end date inclusive, no invoice. It is extended when a new code for the same offer is entered.",
+      "subscriptionHint": "Opened by a voucher: entitlements until the end date inclusive, no invoice. It is extended when a new code for the same offer is entered, or from here (“Extend”).",
       "status": {
         "ACTIVE": "Available",
         "USED": "Used",
@@ -1493,6 +1497,33 @@
     },
     "filters": {
       "allCurrencies": "All currencies"
+    },
+    "expiring": {
+      "tab": "Expiring soon",
+      "windowLabel": "Window",
+      "window": "Within {{days}} days",
+      "hint": "Caleb and Néhémie plans: manual end (Manual, Voucher), period end (canceled Stripe), grace end (unpaid). Europe/Paris dates.",
+      "col": {
+        "beneficiary": "Beneficiary",
+        "offer": "Offer",
+        "type": "Type",
+        "endDate": "End date",
+        "daysLeft": "Days left",
+        "reminder": "Reminder sent"
+      },
+      "kind": {
+        "MANUAL_END": "Manual end",
+        "PERIOD_END": "Period end",
+        "GRACE_END": "Grace end"
+      },
+      "lastDay": "Last day",
+      "daysCount_one": "{{count}} day",
+      "daysCount_other": "{{count}} days",
+      "empty": "No subscription expires in this period.",
+      "extend": "Extend",
+      "extendTitle": "Extend the subscription",
+      "currentEnd": "Current end: {{date}}",
+      "extendedToast": "Subscription extended"
     }
   },
   "supervision": {

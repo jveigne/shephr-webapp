@@ -19,6 +19,7 @@ import {
   createOffer,
   createPromoCode,
   createVoucherBatch,
+  EXPIRING_WINDOWS,
   deletePromoCode,
   disablePromoCode,
   downloadInvoicePdf,
@@ -29,6 +30,7 @@ import {
   getBillingOverview,
   getBillingSubscription,
   listBillingSubscriptions,
+  listExpiringSubscriptions,
   listInvoices,
   listOffers,
   listPromoCodes,
@@ -42,6 +44,7 @@ import {
   updatePromoCode,
   BILLING_CURRENCIES,
   type AdminInvoice,
+  type AdminExpiringSubscription,
   type AdminOffer,
   type AdminPlanCount,
   type AdminPromoCode,
@@ -52,6 +55,7 @@ import {
   type BillingPeriod,
   type BillingSource,
   type BillingSubscriptionStatus,
+  type ExpiringWindow,
   type ManualSubscriptionRequest,
   type OfferRequest,
   type PlanScope,
@@ -78,8 +82,13 @@ import type { AdminUserResponse, ModuleRole } from "@/services/userService";
 // (`localPriceLabel`, information seulement) dans le formulaire des offres.
 // D-OFF-10.. / §3.8 (JP 27/10) — libellés commerciaux « Offre Caleb » (DIRIGEANT_HIERARCHIE) et « Offre Néhémie »
 // (EGLISE_VILLE) : le nom vient du serveur (`bil_offer.name`), le sous-titre de `billing.planNames.*`.
+// D-BER-04 (JP 29/10, lot BER) — onglet « Expirent bientôt » : plans (Caleb ET Néhémie) dont la fin programmée
+// (fin manuelle MANUEL / VOUCHER, fin de période Stripe résilié, fin de grâce PAST_DUE) tombe dans 7 / 30 / 60 jours
+// (défaut 30), calculée et triée par le SERVEUR (`GET /admin/billing/subscriptions/expiring`, Europe/Paris) ;
+// « Prolonger » MANUEL / VOUCHER = PATCH `manualEndDate` existant. L'activation manuelle d'un Caleb individuel
+// (`userId` + date de fin, RG-BER-36) reste dans l'onglet Abonnements.
 
-type Tab = "overview" | "subscriptions" | "invoices" | "offers" | "promo" | "vouchers";
+type Tab = "overview" | "subscriptions" | "expiring" | "invoices" | "offers" | "promo" | "vouchers";
 const PAGE_SIZE = 25;
 const SUB_STATUSES: BillingSubscriptionStatus[] = ["PENDING", "ACTIVE", "PAST_DUE", "CANCELED", "EXPIRED"];
 const SOURCES: BillingSource[] = ["STRIPE", "MANUEL", "VOUCHER"];
@@ -172,6 +181,18 @@ function fmtDay(ymd: string | null | undefined, locale: string): string {
 /** §1 — « aujourd'hui » au fuseau métier Europe/Paris, en `YYYY-MM-DD` (borne basse d'une date de fin manuelle). */
 function todayParis(): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Paris", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+}
+
+/**
+ * R-BER-09 (29_10_2026/01 §12.5) — borne basse de « Prolonger » : le lendemain de la fin actuelle (prolonger ne
+ * raccourcit jamais), et aujourd'hui au plus tôt (une fin passée — EXPIRED / CANCELED à réactiver — part d'aujourd'hui).
+ * Calcul sur la date civile `YYYY-MM-DD`, sans fuseau.
+ */
+function minExtendDate(currentEnd: string | null | undefined, today: string): string {
+  if (!currentEnd || !/^\d{4}-\d{2}-\d{2}$/.test(currentEnd)) return today;
+  const [y, m, d] = currentEnd.split("-").map(Number);
+  const next = new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
+  return next > today ? next : today;
 }
 
 /**
@@ -302,6 +323,8 @@ export default function FacturationPage() {
   const tabs: { id: Tab; label: string }[] = [
     { id: "overview", label: t("billing.tabs.overview") },
     { id: "subscriptions", label: t("billing.tabs.subscriptions") },
+    // D-BER-04 (JP 29/10) — après « Abonnements ».
+    { id: "expiring", label: t("billing.expiring.tab") },
     { id: "invoices", label: t("billing.tabs.invoices") },
     { id: "offers", label: t("billing.tabs.offers") },
     { id: "promo", label: t("billing.tabs.promo") },
@@ -324,6 +347,7 @@ export default function FacturationPage() {
           <OverviewTab onOpenReference={(ref) => { setSubSeed((s) => ({ search: ref, n: s.n + 1 })); setTab("subscriptions"); }} />
         )}
         {tab === "subscriptions" && <SubscriptionsTab key={subSeed.n} initialSearch={subSeed.search} />}
+        {tab === "expiring" && <ExpiringTab />}
         {tab === "invoices" && <InvoicesTab />}
         {tab === "offers" && <OffersTab />}
         {tab === "promo" && <PromoTab />}
@@ -843,9 +867,9 @@ function SubscriptionDrawer({ id, onClose }: { id: string; onClose: () => void }
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["billing"] });
       setCancelOpen(false);
-      if (s?.source === "MANUEL") {
-        // RG-ABO-29 — MANUEL : aucun appel Stripe, le statut est posé tout de suite.
-        push({ kind: "ok", title: t("billing.manual.endedToast"), msg: "" });
+      if (s && isOffStripe(s.source)) {
+        // RG-ABO-29 — MANUEL (et VOUCHER, B-03) : aucun appel Stripe, le statut est posé tout de suite.
+        push({ kind: "ok", title: t(s.source === "VOUCHER" ? "billing.manual.endedToastVoucher" : "billing.manual.endedToast"), msg: "" });
         return;
       }
       // RG-ABO-08 — le statut final arrive par l'événement Stripe, pas par cette réponse.
@@ -862,24 +886,28 @@ function SubscriptionDrawer({ id, onClose }: { id: string; onClose: () => void }
 
   const address = s ? formatAddress(s.billingAddress) : null;
   const isManual = s?.source === "MANUEL";
-  // D-OFF-08 (JP 27/10) — VOUCHER : comme un MANUEL pour l'affichage (date de fin, ni Stripe ni facture) ; il se
-  // prolonge par un nouveau code saisi sur le web, pas d'ici (PATCH `manualEndDate` réservé au MANUEL).
+  // D-OFF-08 (JP 27/10) — VOUCHER : comme un MANUEL pour l'affichage (date de fin, ni Stripe ni facture).
+  // B-03 (plan 05 §10) / R-BER-10 (29_10_2026/01 §12.5) : le serveur prolonge (PATCH `manualEndDate`) et clôt
+  // (`/cancel`) un VOUCHER comme un MANUEL (`isWithoutStripe`, E-18) ; le tiroir propose donc « Prolonger » et
+  // « Mettre fin » comme pour un MANUEL, cohérent avec l'onglet « Expirent bientôt » (RG-BER-34).
   const isVoucher = s?.source === "VOUCHER";
   const offStripe = isManual || isVoucher;
   // Même règle que le serveur (contrat §12, ABO2) : CANCELED, EXPIRED ou sans abonnement Stripe (PENDING)
   // → 422 BILLING_SUBSCRIPTION_NOT_ACTIVE ; on ne propose donc pas « Résilier » dans ces cas.
   // RG-ABO-29 (JP 27/10) — MANUEL : « Mettre fin » tant qu'il n'est pas EXPIRED ; un CANCELED ne peut plus
   // que finir immédiatement (contrat 27/10 §6).
-  const canCancel = !!s && (isManual
+  const canCancel = !!s && (offStripe
     ? s.status !== "EXPIRED"
     : s.status !== "CANCELED" && s.status !== "EXPIRED" && !!s.stripeSubscriptionId);
-  const canEndAtTerm = !!s && !(isManual && s.status === "CANCELED");
+  const canEndAtTerm = !!s && !(offStripe && s.status === "CANCELED");
   // D-ABO-20 — fin de grâce d'un plan impayé (information ; le droit lui-même est `entitled`, calculé serveur).
   // Revue PP-O1 (27/10) — même condition que `BillingSubscription.graceEndsAt()` (plan STRIPE en PAST_DUE), et
   // rien d'affiché quand le serveur a déjà fermé le droit (`entitled` faux) : le texte ne contredit jamais le badge.
   const grace = s && s.planCode && s.source === "STRIPE" && s.status === "PAST_DUE" && s.entitled
     ? graceEnd(s.pastDueSince) : null;
-  const endDateValid = /^\d{4}-\d{2}-\d{2}$/.test(endDate) && endDate >= today;
+  // R-BER-09 — date postérieure à la fin actuelle (aujourd'hui au plus tôt).
+  const minEnd = minExtendDate(s?.manualEndDate, today);
+  const endDateValid = /^\d{4}-\d{2}-\d{2}$/.test(endDate) && endDate >= minEnd;
 
   const info: [string, ReactNode][] = s ? [
     [t("billing.subs.offer"), s.offerName],
@@ -939,17 +967,21 @@ function SubscriptionDrawer({ id, onClose }: { id: string; onClose: () => void }
               <div style={{ fontSize: 13, color: "var(--ink-500)" }}>{t(isUserPlan ? "billing.subs.graceHintUser" : "billing.subs.graceHint", { date: fmtDate(grace, locale) })}</div>
             )}
 
-            {/* RG-ABO-29 (JP 27/10) — prolonger un MANUEL ; un EXPIRED / CANCELED redevient ACTIVE (RG-ABO-30 contrôlée). */}
-            {isManual && (
+            {/* RG-ABO-29 (JP 27/10) — prolonger un MANUEL ou un VOUCHER (B-03 / R-BER-10) ; un EXPIRED / CANCELED
+                redevient ACTIVE (RG-ABO-30 contrôlée). R-BER-09 : borne basse = lendemain de la fin actuelle. */}
+            {offStripe && (
               <div>
                 <h4 style={{ margin: "0 0 8px" }}>{t("billing.manual.extendTitle")}</h4>
                 <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
-                  <Input type="date" min={today} value={endDate} onChange={(e) => setEndDate(e.target.value)} />
-                  <Button size="sm" variant="primary" disabled={patchM.isPending || !endDateValid || (endDate === (s.manualEndDate ?? "") && s.status === "ACTIVE")}
+                  <Input type="date" min={minEnd} value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+                  <Button size="sm" variant="primary" disabled={patchM.isPending || !endDateValid}
                     onClick={() => patchM.mutate({ manualEndDate: endDate })}>
                     {t("billing.manual.extend")}
                   </Button>
                 </div>
+                {endDate !== "" && /^\d{4}-\d{2}-\d{2}$/.test(endDate) && endDate < minEnd && endDate !== (s.manualEndDate ?? "") && (
+                  <div style={{ fontSize: 12.5, color: "var(--err)", marginTop: 6 }}>{t("billing.manual.extendAfterEnd", { date: fmtDay(minEnd, locale) })}</div>
+                )}
                 <div style={{ fontSize: 12.5, color: "var(--ink-500)", marginTop: 6 }}>
                   {s.status === "EXPIRED" || s.status === "CANCELED" ? t("billing.manual.extendReactivates") : t("billing.manual.extendHint")}
                 </div>
@@ -1042,7 +1074,7 @@ function SubscriptionDrawer({ id, onClose }: { id: string; onClose: () => void }
             </div>
 
             {canCancel && (
-              <Button variant="danger" onClick={() => setCancelOpen(true)}>{isManual ? t("billing.manual.end") : t("billing.subs.cancel")}</Button>
+              <Button variant="danger" onClick={() => setCancelOpen(true)}>{offStripe ? t("billing.manual.end") : t("billing.subs.cancel")}</Button>
             )}
           </div>
         )}
@@ -1052,14 +1084,14 @@ function SubscriptionDrawer({ id, onClose }: { id: string; onClose: () => void }
       <Modal
         open={cancelOpen}
         onClose={() => setCancelOpen(false)}
-        title={isManual ? t("billing.manual.endTitle") : t("billing.subs.cancelTitle")}
+        title={offStripe ? t(isVoucher ? "billing.manual.endTitleVoucher" : "billing.manual.endTitle") : t("billing.subs.cancelTitle")}
         sub={s?.reference}
         footer={
           <>
             <Button variant="ghost" onClick={() => setCancelOpen(false)}>{t("common.close")}</Button>
             {canEndAtTerm && (
               <Button variant="secondary" disabled={cancelM.isPending} onClick={() => cancelM.mutate(false)}>
-                {isManual ? t("billing.manual.endAtTerm") : t("billing.subs.cancelAtEnd")}
+                {offStripe ? t("billing.manual.endAtTerm") : t("billing.subs.cancelAtEnd")}
               </Button>
             )}
             <Button variant="danger" disabled={cancelM.isPending} onClick={() => cancelM.mutate(true)}>{t("billing.subs.cancelNow")}</Button>
@@ -1067,7 +1099,7 @@ function SubscriptionDrawer({ id, onClose }: { id: string; onClose: () => void }
         }
       >
         <p style={{ margin: 0 }}>
-          {isManual
+          {offStripe
             ? t(canEndAtTerm
               ? (isUserPlan ? "billing.manual.endBodyUser" : "billing.manual.endBody")
               : "billing.manual.endBodyCanceled", { date: fmtDay(s?.manualEndDate, locale) })
@@ -1077,6 +1109,157 @@ function SubscriptionDrawer({ id, onClose }: { id: string; onClose: () => void }
         </p>
       </Modal>
     </>
+  );
+}
+
+// ---------- Expirent bientôt — D-BER-04 (JP 29/10, lot BER) ----------
+
+/**
+ * D-BER-04 / RG-BER-27..35 (JP 29/10) — vue des plans qui arrivent à leur fin : la liste, `endDate`, `daysLeft`,
+ * `kind` et `extendable` viennent du serveur (`PlanExpiry`, seul point de décision) ; rien n'est recalculé ici.
+ * Clic sur une ligne → tiroir abonnement existant ; « Prolonger » (MANUEL / VOUCHER) → modale de date.
+ */
+function ExpiringTab() {
+  const { t } = useTranslation();
+  const locale = useLocale();
+  const [days, setDays] = useState<ExpiringWindow>(30);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [extending, setExtending] = useState<AdminExpiringSubscription | null>(null);
+
+  const listQ = useQuery({
+    queryKey: ["billing", "subscriptions", "expiring", days],
+    queryFn: () => listExpiringSubscriptions(days),
+  });
+  const rows = (listQ.data ?? []).map((s) => ({ ...s, _key: s.id }));
+
+  return (
+    <div className="card" style={{ padding: 0 }}>
+      <div style={{ display: "flex", gap: 12, padding: "12px 16px", flexWrap: "wrap", alignItems: "flex-end", borderBottom: "1px solid var(--line,#eee)" }}>
+        <Field label={t("billing.expiring.windowLabel")}>
+          <Select value={String(days)} onChange={(e) => setDays(Number(e.target.value) as ExpiringWindow)}>
+            {EXPIRING_WINDOWS.map((d) => <option key={d} value={d}>{t("billing.expiring.window", { days: d })}</option>)}
+          </Select>
+        </Field>
+        <div style={{ fontSize: 12.5, color: "var(--ink-500)", paddingBottom: 8 }}>{t("billing.expiring.hint")}</div>
+      </div>
+      {listQ.isLoading ? (
+        <div style={{ padding: 24, color: "var(--ink-500)" }}>{t("common.loading")}</div>
+      ) : listQ.isError ? (
+        <div style={{ padding: 24, color: "var(--ink-500)" }}>{errMsg(t, listQ.error)}</div>
+      ) : (
+        <Table
+          rows={rows}
+          onRowClick={(s: AdminExpiringSubscription) => setOpenId(s.id)}
+          empty={<div style={{ padding: 24, color: "var(--ink-500)" }}>{t("billing.expiring.empty")}</div>}
+          columns={[
+            {
+              // Bénéficiaire : le dirigeant (plan USER, Caleb) ou la ville (plan LOCALITY, Néhémie) ; ministère dessous.
+              label: t("billing.expiring.col.beneficiary"),
+              render: (s: AdminExpiringSubscription) => (
+                <div>
+                  <div style={{ fontWeight: 500 }}>
+                    {s.planScope === "USER" ? (s.beneficiaryName ?? s.payerName ?? "—") : (s.localityName ?? "—")}
+                  </div>
+                  <div style={{ fontSize: 12.5, color: "var(--ink-500)" }}>
+                    <ScopeBadge scope={s.planScope} /> {s.ministryName ?? t("billing.subs.noMinistry")}
+                  </div>
+                </div>
+              ),
+            },
+            {
+              label: t("billing.expiring.col.offer"),
+              render: (s: AdminExpiringSubscription) => (
+                <div>
+                  <div>{s.offerName}</div>
+                  <code style={{ fontSize: 12 }}>{s.reference}</code>
+                </div>
+              ),
+            },
+            {
+              label: t("billing.expiring.col.type"),
+              render: (s: AdminExpiringSubscription) => (
+                <div>
+                  <SourceBadge source={s.source} />
+                  <div style={{ fontSize: 12.5, color: "var(--ink-500)", marginTop: 2 }}>{t(`billing.expiring.kind.${s.kind}`)}</div>
+                </div>
+              ),
+            },
+            { label: t("billing.expiring.col.endDate"), render: (s: AdminExpiringSubscription) => fmtDay(s.endDate, locale) },
+            {
+              label: t("billing.expiring.col.daysLeft"),
+              render: (s: AdminExpiringSubscription) => s.daysLeft <= 0
+                ? <Badge tone="err">{t("billing.expiring.lastDay")}</Badge>
+                : <Badge tone={s.daysLeft <= 7 ? "warn" : "gray"}>{t("billing.expiring.daysCount", { count: s.daysLeft })}</Badge>,
+            },
+            { label: t("billing.expiring.col.reminder"), render: (s: AdminExpiringSubscription) => fmtDate(s.reminderSentAt, locale) },
+            {
+              label: "",
+              render: (s: AdminExpiringSubscription) => s.extendable ? (
+                <span onClick={(e) => e.stopPropagation()}>
+                  <Button size="sm" variant="ghost" onClick={() => setExtending(s)}>{t("billing.expiring.extend")}</Button>
+                </span>
+              ) : null,
+            },
+          ]}
+        />
+      )}
+      {openId && <SubscriptionDrawer id={openId} onClose={() => setOpenId(null)} />}
+      {extending && <ExtendExpiringModal sub={extending} onClose={() => setExtending(null)} />}
+    </div>
+  );
+}
+
+/**
+ * RG-BER-34 / RG-BER-35 (JP 29/10) — prolonger un MANUEL / VOUCHER depuis « Expirent bientôt » : date ≥ aujourd'hui
+ * (Europe/Paris), PATCH `manualEndDate` existant (règles serveur inchangées : 422 BILLING_SUBSCRIPTION_NOT_MANUAL,
+ * 400 INVALID_PARAMETER, 422 SUBSCRIPTION_ALREADY_ACTIVE), puis rechargement (la nouvelle date réarme le rappel J-7).
+ */
+function ExtendExpiringModal({ sub, onClose }: { sub: AdminExpiringSubscription; onClose: () => void }) {
+  const { t } = useTranslation();
+  const locale = useLocale();
+  const qc = useQueryClient();
+  const { push } = useToasts();
+  const today = todayParis();
+  // R-BER-09 (29_10_2026/01 §12.5) — « Prolonger » ne raccourcit jamais : date postérieure à la fin actuelle.
+  const minEnd = minExtendDate(sub.endDate, today);
+  const [endDate, setEndDate] = useState(minEnd);
+  const valid = /^\d{4}-\d{2}-\d{2}$/.test(endDate) && endDate >= minEnd;
+
+  const patchM = useMutation({
+    mutationFn: () => patchBillingSubscription(sub.id, { manualEndDate: endDate }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["billing"] });
+      push({ kind: "ok", title: t("billing.expiring.extendedToast"), msg: sub.reference });
+      onClose();
+    },
+    onError: (e) => push({ kind: "error", title: t("common.failure"), msg: errMsg(t, e) }),
+  });
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={t("billing.expiring.extendTitle")}
+      sub={`${sub.offerName} · ${sub.planScope === "USER" ? (sub.beneficiaryName ?? sub.payerName ?? "—") : (sub.localityName ?? "—")}`}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>{t("common.cancel")}</Button>
+          <Button variant="primary" disabled={!valid || patchM.isPending} onClick={() => patchM.mutate()}>
+            {patchM.isPending ? t("common.saving") : t("billing.expiring.extend")}
+          </Button>
+        </>
+      }
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ fontSize: 13.5 }}>{t("billing.expiring.currentEnd", { date: fmtDay(sub.endDate, locale) })}</div>
+        <Field label={t("billing.manual.endDate")} hint={t("billing.manual.extendAfterEnd", { date: fmtDay(minEnd, locale) })}>
+          <Input type="date" min={minEnd} value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+        </Field>
+        {/^\d{4}-\d{2}-\d{2}$/.test(endDate) && endDate < minEnd && (
+          <div style={{ fontSize: 12.5, color: "var(--err)" }}>{t("billing.manual.extendAfterEnd", { date: fmtDay(minEnd, locale) })}</div>
+        )}
+      </div>
+    </Modal>
   );
 }
 
@@ -1276,7 +1459,10 @@ function OffersTab() {
   const usdCents = form.usdPrice.trim() === "" ? null : parseCents(form.usdPrice);
   const usdAnnualCents = form.usdAnnualPrice.trim() === "" ? null : parseCents(form.usdAnnualPrice);
   const usdValid = (usdCents === null || (Number.isFinite(usdCents) && usdCents > 0))
-    && (usdAnnualCents === null || (Number.isFinite(usdAnnualCents) && usdAnnualCents > 0 && usdCents !== null));
+    && (usdAnnualCents === null || (Number.isFinite(usdAnnualCents) && usdAnnualCents > 0 && usdCents !== null))
+    // R-01 (lot CUR, 07_Plan_Devises_USD §10.4) — un annuel USD sans annuel EUR serait annoncé mais refusé à la caisse
+    // (422 BILLING_PERIOD_UNSUPPORTED : la période se contrôle sur l'EUR) : on l'empêche à la saisie.
+    && (usdAnnualCents === null || annualCents !== null);
   const planValid = !form.isPlan || (
     PLAN_CODE_RE.test(form.planCode) && form.entitlementCodes.length > 0
     && (annualCents === null || (Number.isFinite(annualCents) && annualCents > 0))
@@ -1488,6 +1674,10 @@ function OffersTab() {
                 </div>
                 {usdAnnualCents !== null && usdCents === null && (
                   <div style={{ fontSize: 12.5, color: "var(--err)", marginTop: -6 }}>{t("billing.offers.usdAnnualNeedsMonthly")}</div>
+                )}
+                {/* R-01 (lot CUR) — l'annuel USD exige l'annuel EUR. */}
+                {usdAnnualCents !== null && annualCents === null && (
+                  <div style={{ fontSize: 12.5, color: "var(--err)", marginTop: -6 }}>{t("billing.offers.usdAnnualNeedsEurAnnual")}</div>
                 )}
                 {/* D-OFF-08 (JP 27/10) — prix local : texte libre, INFORMATION seulement, affiché sur le web à côté du
                     champ code (« Mobile Money auprès de votre relais — … »). Jamais sur mobile. */}

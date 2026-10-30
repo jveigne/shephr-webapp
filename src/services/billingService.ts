@@ -295,6 +295,44 @@ export interface ManualSubscriptionRequest {
   notes?: string | null;
 }
 
+// Mirrors com.excellence.back.billing.PlanExpiry.Kind (lot BER, D-BER-04 / D-BER-08, JP 29/10) — MANUAL_END : MANUEL /
+// VOUCHER (`manualEndDate`) ; PERIOD_END : STRIPE CANCELED ou ACTIVE + `cancelAtPeriodEnd` ; GRACE_END : STRIPE
+// PAST_DUE (`pastDueSince` + 14 j). Calculé par le SERVEUR (seul point de décision), jamais recalculé ici.
+export type ExpiryKind = "MANUAL_END" | "PERIOD_END" | "GRACE_END";
+/** D-BER-04 (JP 29/10) — fenêtres proposées par « Expirent bientôt » (RG-BER-27 : autre valeur → 400). */
+export type ExpiringWindow = 7 | 30 | 60;
+export const EXPIRING_WINDOWS: ExpiringWindow[] = [7, 30, 60];
+
+// Mirrors com.excellence.back.billing.BillingDtos.AdminExpiringSubscription (lot BER, JP 29/10)
+export interface AdminExpiringSubscription {
+  id: string;
+  reference: string;
+  planCode: string;
+  planScope: PlanScope;
+  offerName: string;
+  /** Plan USER (Caleb) : le dirigeant bénéficiaire. */
+  beneficiaryUserId: string | null;
+  beneficiaryName: string | null;
+  /** Plan LOCALITY (Néhémie) : la ville. */
+  localityId: string | null;
+  localityName: string | null;
+  ministryId: string | null;
+  ministryName: string | null;
+  payerUserId: string;
+  payerName: string | null;
+  source: BillingSource;
+  status: "ACTIVE" | "CANCELED" | "PAST_DUE";
+  kind: ExpiryKind;
+  /** `YYYY-MM-DD`, Europe/Paris, incluse. */
+  endDate: string;
+  /** `endDate − aujourd'hui` (Europe/Paris) ; 0 = dernier jour. */
+  daysLeft: number;
+  /** RG-BER-34 — source MANUEL ou VOUCHER : « Prolonger » = `patchBillingSubscription(id, { manualEndDate })`. */
+  extendable: boolean;
+  /** D-BER-05 — Instant du rappel J-7 envoyé pour (abonnement, `endDate`), sinon null. */
+  reminderSentAt: string | null;
+}
+
 // Mirrors com.excellence.back.billing.BillingDtos.AdminInvoice — le §4.5 + champs admin.
 export interface AdminInvoice extends BillingInvoice {
   payerName: string | null;
@@ -331,7 +369,8 @@ export interface AdminSubscriptionPatch {
   notes?: string | null;
   /**
    * RG-ABO-29 (JP 27/10) — prolonge un MANUEL (`YYYY-MM-DD`, ≥ aujourd'hui) ; un MANUEL EXPIRED ou CANCELED
-   * redevient ACTIVE. Abonnement Stripe → 422 `BILLING_SUBSCRIPTION_NOT_MANUAL`.
+   * redevient ACTIVE. Abonnement Stripe → 422 `BILLING_SUBSCRIPTION_NOT_MANUAL`. D-OFF-08 / RG-BER-34 (JP 29/10) :
+   * un VOUCHER se prolonge aussi par ce champ (serveur : `isWithoutStripe`).
    */
   manualEndDate?: string;
 }
@@ -426,6 +465,13 @@ export function listBillingSubscriptions(q: SubscriptionQuery): Promise<BillingP
  */
 export function createManualSubscription(body: ManualSubscriptionRequest): Promise<AdminSubscription> {
   return apiFetch<AdminSubscription>(`${BASE}/subscriptions/manual`, { method: "POST", body: JSON.stringify(body) });
+}
+/**
+ * D-BER-04 (JP 29/10, lot BER) — plans (Caleb, Néhémie) dont la fin programmée tombe dans les `days` prochains jours
+ * (RG-BER-27..33) : triés par `endDate` puis `reference` par le serveur. 400 `INVALID_PARAMETER` hors 7 / 30 / 60.
+ */
+export function listExpiringSubscriptions(days: ExpiringWindow): Promise<AdminExpiringSubscription[]> {
+  return apiFetch<AdminExpiringSubscription[]>(`${BASE}/subscriptions/expiring${qs({ days })}`);
 }
 export function getBillingSubscription(id: string): Promise<AdminSubscriptionDetail> {
   return apiFetch<AdminSubscriptionDetail>(`${BASE}/subscriptions/${id}`);
