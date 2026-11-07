@@ -10,6 +10,27 @@ import type { Language } from "./orgService";
 // (`leaderNotes`, unité et leçon, texte brut ≤ 10 000) et actions des membres (`memberActions`,
 // leçon, ≤ 30 textes de ≤ 2 000) ; lues, écrites et importées ici. Le backend normalise (trim,
 // blanc → null, liste vide → null).
+// D-FIN-01 / D-FIN-13 (JP 06/11) — lot « FIN », contrat cmfipraise-backend/docs/shephr/06_11_2026/02_Contrat_API_Enseignement.md
+// §7, §10.3 : un module `PERSONAL` est un parcours individuel, avec auteur, présentation et chapitres rédigés (blocs),
+// sans questions ni prérequis ; l'introduction est la partie 0, chapitre 0. D-FIN-16 : vidéo par chapitre (§6.5).
+
+// Mirrors com.excellence.back.assembly.TeachingModule.Kind
+export type TeachingModuleKind = "ASSEMBLY" | "PERSONAL";
+
+// Mirrors com.excellence.back.assembly.TeachingChapter.Run
+export interface TeachingRun {
+  text: string;
+  bold?: boolean | null;
+  italic?: boolean | null;
+}
+
+// Mirrors com.excellence.back.assembly.TeachingChapter.Block — contrat §3.1 (texte brut, aucun HTML interprété).
+export interface TeachingBlock {
+  type: "h2" | "h3" | "p" | "verse" | "list";
+  runs?: TeachingRun[] | null;
+  reference?: string | null;
+  items?: TeachingRun[][] | null;
+}
 
 // Mirrors com.excellence.back.assembly.StudyQuestion.Type (RG-ETU-20) — mêmes noms dans les trois fronts (§8).
 export type StudyQuestionType = "VRAI_FAUX" | "OUI_NON" | "CHOIX_UNIQUE" | "CHOIX_MULTIPLE"
@@ -26,7 +47,10 @@ export interface TeachingChapterResponse {
   id: string;
   /** Partie du chapitre ; null si le module n'a pas de parties. */
   partId: string | null;
-  /** Unique dans la partie (JP 24/09 : la numérotation repart à 1 dans chaque partie), ou dans le module sans parties. */
+  /**
+   * Unique dans la partie (JP 24/09 : la numérotation repart à 1 dans chaque partie), ou dans le module sans parties.
+   * Module `PERSONAL` (contrat FIN §3.3) : unique dans tout le module, 0 = l'introduction.
+   */
   number: number;
   title: string | null;
   orderIndex: number;
@@ -42,6 +66,16 @@ export interface TeachingChapterResponse {
   leaderNotes?: string | null;
   /** D-ETU-33 (JP 23/10) — « Chaque membre de l'assemblée doit : … » ; null = aucune. */
   memberActions?: string[] | null;
+  /** D-FIN-13 (JP 06/11) — résumé affiché à l'ouverture du chapitre ; null = aucun. */
+  summary: string | null;
+  /** D-FIN-13 (JP 06/11) — calculée par le serveur (200 mots / min) ; null = sans contenu. */
+  readingMinutes: number | null;
+  /** D-FIN-14 (JP 06/11) — false : « Contenu à venir », ne s'ouvre pas. Le contenu se lit par `getChapterContent`. */
+  hasContent: boolean;
+  /** D-FIN-16 (JP 06/11) — vidéo liée, tout statut : le membre ne voit qu'une vidéo publiée. */
+  videoId: string | null;
+  /** Contrat FIN §4.4 — au moins un compte l'a commencé : comme `read`, interdit de retirer le chapitre. */
+  started: boolean;
 }
 
 // Mirrors com.excellence.back.assembly.admin.dto.TeachingModuleAdminDtos.TeachingPartResponse
@@ -74,6 +108,14 @@ export interface TeachingModuleResponse {
   prerequisiteModuleId: string | null;
   /** D-ETU-33 (JP 23/10) — recommandations au dirigeant pour l'unité (présentation du manuel) ; null = aucune. */
   leaderNotes?: string | null;
+  /** D-FIN-01 (JP 06/11) — `PERSONAL` = parcours individuel, hors comptes rendus et hors étude. */
+  kind: TeachingModuleKind;
+  /** D-FIN-01 (JP 06/11) — ex. « Frère Théodore Andoseh » ; null = aucun. */
+  author: string | null;
+  /** D-FIN-01 (JP 06/11) — présentation du parcours ; null = aucune. */
+  description: string | null;
+  /** Contrat FIN §7.2 — posée à la première activation d'un `PERSONAL`, conservée ensuite. */
+  publishedAt: string | null;
   /** Vide = module sans parties ; sinon chaque chapitre porte son partId. */
   parts: TeachingPartResponse[];
   /** Tous les chapitres du module, triés par orderIndex (rang dans le module entier). */
@@ -95,10 +137,15 @@ export interface ChapterInput {
   leaderNotes?: string | null;
   /** D-ETU-33 (JP 23/10) — ≤ 30 éléments de ≤ 2 000. Chapitre existant : null = inchangé, `[]` = effacer. */
   memberActions?: string[] | null;
+  /** D-FIN-13 (JP 06/11) — `PERSONAL` seulement. Chapitre existant : null / absent = inchangé, `[]` = retirer. */
+  content?: TeachingBlock[] | null;
+  /** D-FIN-13 (JP 06/11) — `PERSONAL` seulement, ≤ 2 000. Chapitre existant : null / absent = inchangé, `""` = effacer. */
+  summary?: string | null;
 }
 
 // Mirrors com.excellence.back.assembly.admin.dto.TeachingModuleAdminDtos.PartInput
 export interface PartInput {
+  /** 0 = partie de l'introduction, `PERSONAL` seulement (contrat FIN §3.3). */
   number: number;
   title?: string | null;
   chapters: ChapterInput[];
@@ -123,6 +170,12 @@ export type CreateTeachingModuleRequest = {
   prerequisiteModuleId?: string | null;
   /** D-ETU-33 (JP 23/10) — facultatif, ≤ 10 000. */
   leaderNotes?: string | null;
+  /** D-FIN-01 (JP 06/11) — absent = `ASSEMBLY` ; un `PERSONAL` naît inactif (contrat FIN C-5). */
+  kind?: TeachingModuleKind | null;
+  /** D-FIN-01 (JP 06/11) — ≤ 200. */
+  author?: string | null;
+  /** D-FIN-01 (JP 06/11) — ≤ 2 000. */
+  description?: string | null;
 } & TeachingContent;
 
 // Mirrors com.excellence.back.assembly.admin.dto.TeachingModuleAdminDtos.UpdateTeachingModuleRequest
@@ -141,6 +194,12 @@ export interface UpdateTeachingModuleRequest {
   language?: Language;
   /** D-ETU-33 (JP 23/10) — absent = inchangé ; `""` = effacer ; ≤ 10 000. */
   leaderNotes?: string;
+  /** Contrat FIN §7.1 — absent = inchangé ; refus 422 `TEACHING_MODULE_KIND_LOCKED` ; devenir `PERSONAL` désactive le module. */
+  kind?: TeachingModuleKind;
+  /** D-FIN-01 (JP 06/11) — absent = inchangé ; `""` = effacer ; ≤ 200. */
+  author?: string;
+  /** D-FIN-01 (JP 06/11) — absent = inchangé ; `""` = effacer ; ≤ 2 000. */
+  description?: string;
 }
 
 // Mirrors com.excellence.back.assembly.admin.dto.TeachingModuleAdminDtos.StudyQuestionInput
@@ -196,6 +255,17 @@ export interface StudyImportLesson {
   /** D-ETU-33 (JP 23/10) — transmis tel quel depuis le fichier d'import. */
   memberActions?: string[] | null;
   questions?: StudyQuestionInput[] | null;
+  /** D-FIN-13 (JP 06/11) — `PERSONAL` seulement ; absent = chapitre « Contenu à venir » (D-FIN-14). */
+  content?: TeachingBlock[] | null;
+  /** D-FIN-13 (JP 06/11) — `PERSONAL` seulement, ≤ 2 000. */
+  summary?: string | null;
+}
+
+// Mirrors com.excellence.back.assembly.admin.dto.TeachingModuleAdminDtos.StudyImportPart
+export interface StudyImportPart {
+  number: number;
+  title?: string | null;
+  lessons: StudyImportLesson[];
 }
 
 // Mirrors com.excellence.back.assembly.admin.dto.TeachingModuleAdminDtos.StudyImportRequest
@@ -209,7 +279,30 @@ export interface StudyImportRequest {
   prerequisiteModuleId?: string | null;
   /** D-ETU-33 (JP 23/10) — transmis tel quel depuis le fichier d'import (`_lisezMoi` et autres champs inconnus : ignorés par le backend). */
   leaderNotes?: string | null;
-  lessons: StudyImportLesson[];
+  /** Contrat FIN §7.4 — `ASSEMBLY` : `lessons` seules ; `PERSONAL` : `parts` OU `lessons` (422 `CHAPTERS_OR_PARTS_REQUIRED`). */
+  lessons?: StudyImportLesson[] | null;
+  /** D-FIN-13 (JP 06/11) — `PERSONAL` seulement, parties et chapitres comme le livre. */
+  parts?: StudyImportPart[] | null;
+  /** D-FIN-01 (JP 06/11) — absent = `ASSEMBLY`. */
+  kind?: TeachingModuleKind | null;
+  author?: string | null;
+  description?: string | null;
+}
+
+// Mirrors com.excellence.back.assembly.admin.dto.TeachingModuleAdminDtos.TeachingChapterContentAdmin
+export interface TeachingChapterContentAdmin {
+  chapterId: string;
+  summary: string | null;
+  readingMinutes: number | null;
+  content: TeachingBlock[] | null;
+}
+
+// Mirrors com.excellence.back.assembly.admin.dto.TeachingModuleAdminDtos.TeachingChapterContentRequest
+export interface TeachingChapterContentRequest {
+  /** null / absent = inchangé ; `""` = effacer. */
+  summary?: string | null;
+  /** null / absent = inchangé ; `[]` = retirer, le chapitre repasse « à venir » (422 `TEACHING_MODULE_EMPTY` si c'était le dernier d'un module actif). */
+  content?: TeachingBlock[] | null;
 }
 
 export function listTeachingModules(ministryId?: string): Promise<TeachingModuleResponse[]> {
@@ -233,8 +326,11 @@ export function updateTeachingModule(id: string, patch: UpdateTeachingModuleRequ
 
 /**
  * Remplace le contenu complet (et ordonné) du module — corps `ReplaceChaptersRequest { chapters }`
- * ou `{ parts }`. Un chapitre est identifié par (numéro de partie, numéro).
+ * ou `{ parts }`. Un chapitre est identifié par (numéro de partie, numéro) ; dans un parcours personnel, par son numéro
+ * seul : le déplacer d'une partie à l'autre garde son texte et sa vidéo (revue du lot FIN, 06/11).
  * 422 `CHAPTER_ALREADY_READ` si on retire un chapitre déjà lu (RG-ASM-02) ou étudié (RG-ETU-23).
+ * 422 `TEACHING_CHAPTER_HAS_CONTENT` si on retire un chapitre rédigé ou filmé, ce que fait aussi changer son numéro :
+ * retirer d'abord son contenu et sa vidéo (revue du lot FIN, 06/11).
  */
 export function replaceTeachingContent(id: string, content: TeachingContent): Promise<TeachingModuleResponse> {
   return apiFetch<TeachingModuleResponse>(`/admin/teaching-modules/${id}/chapters`, {
@@ -271,5 +367,29 @@ export function importStudyModule(req: StudyImportRequest): Promise<TeachingModu
   return apiFetch<TeachingModuleResponse>("/admin/teaching-modules/import", {
     method: "POST",
     body: JSON.stringify(req),
+  });
+}
+
+/** Contrat FIN §7.3 — relire un chapitre sans recharger tout le livre (`PERSONAL` seulement). */
+export function getChapterContent(moduleId: string, chapterId: string): Promise<TeachingChapterContentAdmin> {
+  return apiFetch<TeachingChapterContentAdmin>(`/admin/teaching-modules/${moduleId}/chapters/${chapterId}/content`);
+}
+
+/** Contrat FIN §7.3 — remplacer le contenu d'un seul chapitre, 422 `TEACHING_CONTENT_INVALID` (message = liste des défauts). */
+export function putChapterContent(moduleId: string, chapterId: string, req: TeachingChapterContentRequest): Promise<TeachingChapterContentAdmin> {
+  return apiFetch<TeachingChapterContentAdmin>(`/admin/teaching-modules/${moduleId}/chapters/${chapterId}/content`, {
+    method: "PUT",
+    body: JSON.stringify(req),
+  });
+}
+
+/**
+ * D-FIN-16 (JP 06/11), contrat §6.5 — lier (ou, `null`, délier) la vidéo d'un chapitre, même ministère
+ * (422 `TEACHING_VIDEO_WRONG_MINISTRY`). Hors `ChapterInput` : `replaceTeachingContent` ne touche pas la vidéo.
+ */
+export function linkChapterVideo(moduleId: string, chapterId: string, videoId: string | null): Promise<TeachingModuleResponse> {
+  return apiFetch<TeachingModuleResponse>(`/admin/teaching-modules/${moduleId}/chapters/${chapterId}/video`, {
+    method: "PUT",
+    body: JSON.stringify({ videoId }),
   });
 }

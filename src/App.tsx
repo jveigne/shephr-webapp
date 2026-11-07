@@ -16,6 +16,7 @@ import UtilisateursPage from "@/pages/Utilisateurs";
 import AbonnementsPage from "@/pages/Abonnements";
 import FacturationPage from "@/pages/Facturation";
 import ModulesEnseignementPage from "@/pages/ModulesEnseignement";
+import VideosEnseignementPage from "@/pages/VideosEnseignement";
 import TypesEvenementPage from "@/pages/TypesEvenement";
 import DocumentsPage from "@/pages/Documents";
 import AuditPage from "@/pages/Audit";
@@ -70,6 +71,8 @@ export default function App() {
               <Route path="/facturation" element={<Shielded><FacturationPage /></Shielded>} />
               {/* D-ASM-10 (JP 23/09) — modules d'enseignement par ministère */}
               <Route path="/modules-enseignement" element={<Shielded><ModulesEnseignementPage /></Shielded>} />
+              {/* D-FIN-16 (JP 06/11) — vidéos des parcours individuels, dépôt direct sur R2 (contrat FIN §6.5) */}
+              <Route path="/videos-enseignement" element={<Shielded><VideosEnseignementPage /></Shielded>} />
               {/* RG-EVT-01 (JP 14/10) — types d'évènement par ministère (§6.1 du plan Évènements) */}
               <Route path="/types-evenement" element={<Shielded><TypesEvenementPage /></Shielded>} />
               {/* D-DOC-07 (JP 18/10) — documents partagés par lien + catégories (§6.1 du plan Liseuse & partage) */}

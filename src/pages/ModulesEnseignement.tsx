@@ -10,22 +10,31 @@ import { listMinistries, type MinistryResponse } from "@/services/ministryServic
 import { LANGUAGES, type Language } from "@/services/orgService";
 import {
   createTeachingModule,
+  getChapterContent,
   importStudyModule,
+  linkChapterVideo,
   listChapterQuestions,
   listTeachingModules,
+  putChapterContent,
   replaceChapterQuestions,
   replaceTeachingContent,
   updateTeachingModule,
   type ChapterInput,
   type StudyAnswerFormat,
+  type StudyImportLesson,
   type StudyImportRequest,
   type StudyQuestionAdmin,
   type StudyQuestionInput,
   type StudyQuestionType,
+  type TeachingBlock,
+  type TeachingChapterContentAdmin,
   type TeachingContent,
+  type TeachingModuleKind,
   type TeachingModuleResponse,
+  type TeachingRun,
   type UpdateTeachingModuleRequest,
 } from "@/services/teachingModuleService";
+import { listTeachingVideos, type AdminTeachingVideo } from "@/services/teachingVideoService";
 
 // D-ASM-10 (JP 23/09) — Modules d'enseignement : propres à chaque ministère, communs à toutes ses
 // assemblées ; créés / modifiés / désactivés ici par SUPER_ADMIN uniquement (RG-ASM-01).
@@ -36,6 +45,9 @@ import {
 // questions — D-ETU-01 / D-ETU-02) ; import JSON (D-ETU-16) d'un module né inactif (D-ETU-17).
 // D-ETU-33 (JP 23/10) — recommandations au dirigeant (unité et leçon) et actions des membres
 // (leçon, une action par ligne ↔ liste) : saisies ici ou importées telles quelles du fichier.
+// D-FIN-01 / D-FIN-13 (JP 06/11) — parcours personnel (`PERSONAL`, contrat FIN §7) dans cette même page : auteur et
+// présentation, aucune question ni prérequis, contenu en blocs importé (JSON) et relu en lecture seule, vidéo par chapitre
+// (D-FIN-16). Aucun « CMCI » ici : un ministère voit un parcours parce qu'il y a publié du contenu (D-FIN-02).
 
 /** Une ligne de chapitre en cours d'édition (numéro saisi en texte pour laisser l'input libre). */
 interface ChapterRow {
@@ -50,6 +62,14 @@ interface ChapterRow {
   read: boolean;
   /** RG-ETU-23 — déjà étudié en séance : même verrou que `read`. */
   studied: boolean;
+  /** Contrat FIN §4.4 — commencé par un membre : même verrou que `read`. */
+  started: boolean;
+  /** D-FIN-14 (JP 06/11) — false : « Contenu à venir ». */
+  hasContent: boolean;
+  /** D-FIN-13 (JP 06/11) — calculée par le serveur. */
+  readingMinutes: number | null;
+  /** D-FIN-16 (JP 06/11) — vidéo liée au chapitre. */
+  videoId: string | null;
   questionCount: number;
   /** D-ETU-33 (JP 23/10) — recommandations au dirigeant pour la leçon. */
   leaderNotes: string;
@@ -65,8 +85,11 @@ const MEMBER_ACTION_MAX_LENGTH = 2000;
 /** D-ETU-33 — une action par ligne : lignes trimées, lignes vides retirées. */
 const actionsOf = (text: string): string[] => text.split("\n").map((l) => l.trim()).filter(Boolean);
 
-/** RG-ASM-02 / RG-ETU-23 — un chapitre lu ou étudié se renomme, ne se retire ni ne se renumérote. */
-const isLocked = (c: ChapterRow) => c.read || c.studied;
+/** RG-ASM-02 / RG-ETU-23 / contrat FIN §4.4 — un chapitre lu, étudié ou commencé se renomme, ne se retire ni ne se renumérote. */
+const isLocked = (c: ChapterRow) => c.read || c.studied || c.started;
+
+/** Contrat FIN §3.3 — le numéro 0 (introduction) n'existe que sur un parcours personnel ; le serveur reste juge. */
+const minNumberOf = (kind: TeachingModuleKind) => (kind === "PERSONAL" ? 0 : 1);
 
 /**
  * Un bloc de chapitres : une partie, ou l'unique bloc d'un module sans parties (`number` ignoré).
@@ -82,6 +105,11 @@ interface SectionRow {
 }
 
 interface FormState {
+  /** D-FIN-01 (JP 06/11) — Assemblée (CR, étude) ou Parcours personnel. */
+  kind: TeachingModuleKind;
+  /** D-FIN-01 (JP 06/11) — parcours personnel seulement. */
+  author: string;
+  description: string;
   ministryId: string;
   name: string;
   bookTitle: string;
@@ -101,8 +129,8 @@ let rowSeq = 0;
 const newKey = () => `row-${++rowSeq}`;
 
 const newChapterRow = (n: number): ChapterRow => ({
-  key: newKey(), id: null, number: String(n), title: "", portion: "", read: false, studied: false, questionCount: 0,
-  leaderNotes: "", memberActions: "",
+  key: newKey(), id: null, number: String(n), title: "", portion: "", read: false, studied: false, started: false, questionCount: 0,
+  leaderNotes: "", memberActions: "", hasContent: false, readingMinutes: null, videoId: null,
 });
 
 const newSection = (number: string, chapters: ChapterRow[] = []): SectionRow => ({
@@ -115,6 +143,9 @@ const newSection = (number: string, chapters: ChapterRow[] = []): SectionRow => 
 });
 
 const emptyForm = (ministryId = ""): FormState => ({
+  kind: "ASSEMBLY",
+  author: "",
+  description: "",
   ministryId,
   name: "",
   bookTitle: "",
@@ -128,7 +159,8 @@ const emptyForm = (ministryId = ""): FormState => ({
 
 function parseNumber(s: string): number | null {
   const n = Number(s.trim());
-  return Number.isInteger(n) && n >= 1 ? n : null;
+  // Contrat FIN §3.3 — 0 est lu ici ; `minNumberOf` dit s'il est permis pour ce type de module.
+  return s.trim() !== "" && Number.isInteger(n) && n >= 0 ? n : null;
 }
 
 /**
@@ -209,14 +241,26 @@ function errorText(e: unknown, t: TFunction): string {
   if (code === "STUDY_QUESTION_ANSWERED") return t("teachingModules.questions.errAnswered");
   if (code === "STUDY_QUESTION_INVALID") return t("teachingModules.questions.errParentInvalid");
   if (code === "DUPLICATE_QUESTION_NUMBER") return t("teachingModules.questions.errDuplicateNumber");
+  if (code === "TEACHING_MODULE_PERSONAL_NO_QUESTIONS") return t("teachingModules.errors.personalNoQuestions");
+  if (code === "TEACHING_MODULE_NOT_PERSONAL") return t("teachingModules.errors.notPersonal");
+  if (code === "TEACHING_MODULE_KIND_LOCKED") return t("teachingModules.errors.kindLocked");
+  if (code === "TEACHING_MODULE_EMPTY") return t("teachingModules.errors.empty");
+  // Revue du lot FIN (06/11) — le message du serveur est la liste des chapitres (« Chapitre 27 »), comme TEACHING_CONTENT_INVALID.
+  if (code === "TEACHING_CHAPTER_HAS_CONTENT" && e instanceof Error) return `${t("teachingModules.errors.hasContent")}\n${e.message}`;
+  if (code === "TEACHING_NUMBER_ZERO_FORBIDDEN") return t("teachingModules.errors.numberZeroForbidden");
+  if (code === "TEACHING_VIDEO_WRONG_MINISTRY") return t("teachingModules.errors.videoWrongMinistry");
+  // Contrat FIN §3.1 — le message du serveur est la liste des défauts (« Chapitre 3 · bloc 12 : type inconnu »).
+  if (code === "TEACHING_CONTENT_INVALID" && e instanceof Error) return `${t("teachingModules.errors.contentInvalid")}\n${e.message}`;
   return e instanceof Error ? e.message : t("common.error");
 }
 
 /** Erreur locale d'une liste de chapitres (le backend reste juge : 400 / 422). */
-function chaptersErrorKey(rows: ChapterRow[]): string | null {
+function chaptersErrorKey(rows: ChapterRow[], kind: TeachingModuleKind): string | null {
   const numbers = rows.map((c) => parseNumber(c.number));
   if (rows.length === 0) return "teachingModules.errNoChapters";
-  if (numbers.some((n) => n == null)) return "teachingModules.errInvalidNumber";
+  if (numbers.some((n) => n == null || n < minNumberOf(kind))) {
+    return kind === "PERSONAL" ? "teachingModules.errInvalidNumberPersonal" : "teachingModules.errInvalidNumber";
+  }
   if (new Set(numbers).size !== numbers.length) return "teachingModules.errDuplicateNumber";
   // D-ETU-33 — limites de l'avenant §2.
   if (rows.some((c) => c.leaderNotes.trim().length > LEADER_NOTES_MAX)) return "teachingModules.errLeaderNotesTooLong";
@@ -236,6 +280,8 @@ export default function ModulesEnseignementPage() {
   const [form, setForm] = useState<FormState>(emptyForm);
   /** Leçon dont l'éditeur de questions est ouvert (au-dessus de la modale du module). */
   const [questionsFor, setQuestionsFor] = useState<ChapterRow | null>(null);
+  /** D-FIN-13 (JP 06/11) — chapitre dont l'aperçu est ouvert (au-dessus de la modale du module). */
+  const [contentFor, setContentFor] = useState<ChapterRow | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   /** RG-ETU-22 — activation refusée : la liste des questions fautives, affichée telle quelle. */
   const [contentInvalid, setContentInvalid] = useState<{ name: string; message: string } | null>(null);
@@ -251,6 +297,14 @@ export default function ModulesEnseignementPage() {
     queryKey: ["teaching-modules", form.ministryId],
     queryFn: () => listTeachingModules(form.ministryId),
     enabled: open && !!form.ministryId,
+  });
+
+  // D-FIN-16 (JP 06/11) — vidéos proposées pour un chapitre : celles du ministère du module (même clé que /videos-enseignement).
+  const savedPersonal = !!editing && editing.kind === "PERSONAL" && form.kind === "PERSONAL";
+  const videosQ = useQuery({
+    queryKey: ["teaching-videos", form.ministryId],
+    queryFn: () => listTeachingVideos(form.ministryId),
+    enabled: open && savedPersonal,
   });
 
   const ministryName = useMemo(() => {
@@ -287,15 +341,28 @@ export default function ModulesEnseignementPage() {
       const code = form.code.trim();
       const prerequisiteModuleId = form.prerequisiteModuleId;
       const leaderNotes = form.leaderNotes.trim();
+      const personal = form.kind === "PERSONAL";
+      const author = form.author.trim();
+      const description = form.description.trim();
       if (!editing) {
         return createTeachingModule({
           ministryId: form.ministryId, name, bookTitle, code: code || null, language: form.language,
-          prerequisiteModuleId: prerequisiteModuleId || null, leaderNotes: leaderNotes || null, ...content,
+          // Contrat FIN §4.3 — un parcours n'a ni prérequis ni recommandations au dirigeant.
+          prerequisiteModuleId: personal ? null : prerequisiteModuleId || null,
+          leaderNotes: personal ? null : leaderNotes || null,
+          kind: form.kind,
+          author: personal ? author || null : null,
+          description: personal ? description || null : null,
+          ...content,
         });
       }
       let result = editing;
       // PATCH : absent = inchangé ; remettre à null passe par clearCode / clearPrerequisite.
       const patch: UpdateTeachingModuleRequest = {};
+      // Contrat FIN §7.1 — refus éventuel 422 TEACHING_MODULE_KIND_LOCKED ; le PATCH passe avant le PUT du contenu.
+      if (form.kind !== editing.kind) patch.kind = form.kind;
+      if (personal && author !== (editing.author ?? "")) patch.author = author;
+      if (personal && description !== (editing.description ?? "")) patch.description = description;
       if (name !== editing.name) patch.name = name;
       if (bookTitle !== editing.bookTitle) patch.bookTitle = bookTitle;
       if (code !== (editing.code ?? "")) {
@@ -303,12 +370,13 @@ export default function ModulesEnseignementPage() {
         else patch.clearCode = true;
       }
       if (form.language !== (editing.language ?? "FR")) patch.language = form.language;
-      if (prerequisiteModuleId !== (editing.prerequisiteModuleId ?? "")) {
-        if (prerequisiteModuleId) patch.prerequisiteModuleId = prerequisiteModuleId;
+      const nextPrerequisite = personal ? "" : prerequisiteModuleId;
+      if (nextPrerequisite !== (editing.prerequisiteModuleId ?? "")) {
+        if (nextPrerequisite) patch.prerequisiteModuleId = nextPrerequisite;
         else patch.clearPrerequisite = true;
       }
       // D-ETU-33 (JP 23/10) — absent = inchangé ; `""` = effacer.
-      if (leaderNotes !== (editing.leaderNotes ?? "")) patch.leaderNotes = leaderNotes;
+      if (!personal && leaderNotes !== (editing.leaderNotes ?? "")) patch.leaderNotes = leaderNotes;
       if (Object.keys(patch).length > 0) {
         result = await updateTeachingModule(editing.id, patch);
       }
@@ -341,8 +409,9 @@ export default function ModulesEnseignementPage() {
     const rowsOf = (list: typeof chapters): ChapterRow[] =>
       list.map((c) => ({
         key: newKey(), id: c.id, number: String(c.number), title: c.title ?? "", portion: c.portion ?? "",
-        read: c.read, studied: c.studied, questionCount: c.questionCount,
+        read: c.read, studied: c.studied, started: c.started, questionCount: c.questionCount,
         leaderNotes: c.leaderNotes ?? "", memberActions: (c.memberActions ?? []).join("\n"),
+        hasContent: c.hasContent, readingMinutes: c.readingMinutes, videoId: c.videoId,
       }));
     const sections = m.parts.length === 0
       ? [newSection("", rowsOf(chapters))]
@@ -350,6 +419,7 @@ export default function ModulesEnseignementPage() {
           .sort((a, b) => a.orderIndex - b.orderIndex)
           .map((p) => ({ ...newSection(String(p.number), rowsOf(chapters.filter((c) => c.partId === p.id))), title: p.title ?? "" }));
     setForm({
+      kind: m.kind, author: m.author ?? "", description: m.description ?? "",
       ministryId: m.ministryId, name: m.name, bookTitle: m.bookTitle, code: m.code ?? "", language: m.language ?? "FR",
       prerequisiteModuleId: m.prerequisiteModuleId ?? "", leaderNotes: m.leaderNotes ?? "", withParts: m.parts.length > 0, sections,
     });
@@ -389,18 +459,22 @@ export default function ModulesEnseignementPage() {
 
   // Validation locale (le backend reste juge : 400 / 422 DUPLICATE_*_NUMBER).
   const partNumbers = form.sections.map((s) => parseNumber(s.number));
+  // Contrat FIN §3.3 — sur un parcours, un numéro de chapitre est unique dans TOUT le module (numérotation du livre).
+  const allNumbers = form.sections.flatMap((s) => s.chapters.map((c) => parseNumber(c.number)));
   const partsError = !form.withParts
     ? null
     : form.sections.length === 0
       ? t("teachingModules.errNoParts")
-      : partNumbers.some((n) => n == null)
-        ? t("teachingModules.errInvalidPartNumber")
+      : partNumbers.some((n) => n == null || n < minNumberOf(form.kind))
+        ? t(form.kind === "PERSONAL" ? "teachingModules.errInvalidPartNumberPersonal" : "teachingModules.errInvalidPartNumber")
         : new Set(partNumbers).size !== partNumbers.length
           ? t("teachingModules.errDuplicatePartNumber")
-          : null;
-  const hasChaptersError = form.sections.some((s) => chaptersErrorKey(s.chapters) != null);
+          : form.kind === "PERSONAL" && new Set(allNumbers).size !== allNumbers.length
+            ? t("teachingModules.errDuplicateNumberPersonal")
+            : null;
+  const hasChaptersError = form.sections.some((s) => chaptersErrorKey(s.chapters, form.kind) != null);
   const chapterCount = form.sections.reduce((n, s) => n + s.chapters.length, 0);
-  const leaderNotesTooLong = form.leaderNotes.trim().length > LEADER_NOTES_MAX;
+  const leaderNotesTooLong = form.kind !== "PERSONAL" && form.leaderNotes.trim().length > LEADER_NOTES_MAX;
   const canSave =
     !!form.ministryId && !!form.name.trim() && !!form.bookTitle.trim() && !partsError && !hasChaptersError && !leaderNotesTooLong
     && !saveM.isPending;
@@ -416,6 +490,8 @@ export default function ModulesEnseignementPage() {
   const formCode = form.code.trim();
   const prerequisiteChoices = (sameMinistryQ.data ?? []).filter(
     (m) => m.ministryId === form.ministryId
+      // Contrat FIN §4.3 — un parcours personnel n'est le prérequis de rien.
+      && m.kind !== "PERSONAL"
       && !(formCode && m.code === formCode)
       && (!editing || (m.id !== editing.id && !leadsTo(m.id, editing.id, sameMinistryQ.data ?? []))),
   );
@@ -426,6 +502,25 @@ export default function ModulesEnseignementPage() {
       ...f,
       sections: f.sections.map((s) => ({ ...s, chapters: s.chapters.map((c) => (c.id === chapterId ? { ...c, questionCount: count } : c)) })),
     }));
+
+  const patchChapterRow = (chapterId: string, patch: Partial<ChapterRow>) =>
+    setForm((f) => ({
+      ...f,
+      sections: f.sections.map((s) => ({ ...s, chapters: s.chapters.map((c) => (c.id === chapterId ? { ...c, ...patch } : c)) })),
+    }));
+
+  // D-FIN-16 (JP 06/11), contrat §6.5 — liaison immédiate, hors « Enregistrer » : `replaceTeachingContent` ne touche pas la vidéo.
+  const linkVideoM = useMutation({
+    mutationFn: (v: { chapterId: string; videoId: string | null }) => linkChapterVideo(editing!.id, v.chapterId, v.videoId),
+    onSuccess: (m, v) => {
+      setEditing(m);
+      patchChapterRow(v.chapterId, { videoId: v.videoId });
+      invalidate();
+      // `chapterCount` des fiches vidéo.
+      qc.invalidateQueries({ queryKey: ["teaching-videos"] });
+    },
+    onError: (e: unknown) => push({ kind: "error", title: t("teachingModules.saveFailToast"), msg: errText(e) }),
+  });
 
   const onImported = (m: TeachingModuleResponse) => {
     setImportOpen(false);
@@ -454,6 +549,11 @@ export default function ModulesEnseignementPage() {
           <span style={{ marginLeft: 8 }} title={t(`teachingModules.language.${r.language ?? "FR"}`)}>
             <Badge tone={r.language === "EN" ? "earth" : "gray"}>{r.language ?? "FR"}</Badge>
           </span>
+          {/* D-FIN-01 (JP 06/11) — parcours individuel, hors CR et hors étude. */}
+          {r.kind === "PERSONAL" && (
+            <span style={{ marginLeft: 6 }}><Badge tone="green">{t("teachingModules.kind.PERSONAL")}</Badge></span>
+          )}
+          {r.author && <div style={{ color: "var(--ink-500)", fontSize: 12, marginTop: 2 }}>{r.author}</div>}
           {r.prerequisiteModuleId && (
             <div style={{ color: "var(--ink-500)", fontSize: 12, marginTop: 2 }}>
               {t("teachingModules.prerequisiteShort", { module: moduleLabel(r.prerequisiteModuleId) })}
@@ -471,12 +571,15 @@ export default function ModulesEnseignementPage() {
       render: (r: TeachingModuleResponse) => {
         const read = r.chapters.filter((c) => c.read).length;
         const questions = r.chapters.reduce((n, c) => n + (c.questionCount ?? 0), 0);
+        // D-FIN-14 (JP 06/11) — un chapitre sans contenu reste au parcours, « Contenu à venir » : visible ici.
+        const noContent = r.kind === "PERSONAL" ? r.chapters.filter((c) => !c.hasContent).length : 0;
         return (
           <span style={{ color: "var(--ink-700)" }}>
             {r.parts.length > 0 && <>{t("teachingModules.partCount", { count: r.parts.length })} · </>}
             {t("teachingModules.chapterCount", { count: r.chapters.length })}
             {read > 0 && <span style={{ color: "var(--ink-400)" }}> · {t("teachingModules.readCount", { count: read })}</span>}
             {questions > 0 && <span style={{ color: "var(--ink-400)" }}> · {t("teachingModules.questionCount", { count: questions })}</span>}
+            {noContent > 0 && <span style={{ color: "var(--err)" }}> · {t("teachingModules.noContentCount", { count: noContent })}</span>}
           </span>
         );
       },
@@ -503,6 +606,17 @@ export default function ModulesEnseignementPage() {
     },
   ];
 
+  // Aperçu et vidéo : seulement sur un parcours déjà enregistré comme tel (le serveur refuserait sinon, §4.3).
+  const personalTools: PersonalChapterTools | undefined = savedPersonal
+    ? {
+        videos: videosQ.data ?? [],
+        lockedReason: questionsLockedReason,
+        linking: linkVideoM.isPending,
+        onOpenContent: setContentFor,
+        onLinkVideo: (chapterId, videoId) => linkVideoM.mutate({ chapterId, videoId }),
+      }
+    : undefined;
+
   return (
     <>
       <TopBar
@@ -523,6 +637,9 @@ export default function ModulesEnseignementPage() {
         {/* D-ETU-29 / D-ETU-32 (JP 23/10) — catalogue commun aux modules ASSEMBLY (CR) et STUDY (étude) : l'aide le dit. */}
         <p className="section-sub">
           <Trans i18nKey="teachingModules.intro" components={{ strong: <strong /> }} />
+        </p>
+        <p className="section-sub">
+          <Trans i18nKey="teachingModules.introPersonal" components={{ strong: <strong /> }} />
         </p>
 
         <div className="card" style={{ padding: 0 }}>
@@ -551,10 +668,10 @@ export default function ModulesEnseignementPage() {
       <Modal
         open={open}
         // L'éditeur de questions s'empile au-dessus : Échap ne doit fermer que lui.
-        onClose={questionsFor ? undefined : close}
+        onClose={questionsFor || contentFor ? undefined : close}
         size="lg"
         title={editing ? t("teachingModules.editTitle") : t("teachingModules.createTitle")}
-        sub={editing ? ministryName(editing.ministryId) : t("teachingModules.createSub")}
+        sub={editing ? ministryName(editing.ministryId) : t(form.kind === "PERSONAL" ? "teachingModules.createSubPersonal" : "teachingModules.createSub")}
         footer={
           <>
             <Button variant="ghost" onClick={close}>{t("common.cancel")}</Button>
@@ -573,6 +690,13 @@ export default function ModulesEnseignementPage() {
               </Select>
             </Field>
           )}
+          {/* D-FIN-01 (JP 06/11) — type du module ; le serveur refuse un changement qui casserait l'existant (§7.1). */}
+          <Field label={t("teachingModules.kindLabel")} hint={t(form.kind === "PERSONAL" ? "teachingModules.kindHintPersonal" : "teachingModules.kindHintAssembly")}>
+            <Select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value as TeachingModuleKind })}>
+              <option value="ASSEMBLY">{t("teachingModules.kind.ASSEMBLY")}</option>
+              <option value="PERSONAL">{t("teachingModules.kind.PERSONAL")}</option>
+            </Select>
+          </Field>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <Field label={t("teachingModules.nameLabel")}>
               <Input value={form.name} maxLength={200} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder={t("teachingModules.namePlaceholder")} />
@@ -583,7 +707,17 @@ export default function ModulesEnseignementPage() {
           </div>
           {/* D-ETU-01 / D-ETU-19 (JP 21/10) — code et prérequis de l'unité d'étude, facultatifs. */}
           {/* D-ETU-25 (JP 21/10) — langue de la version : même code en FR et en EN. */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr", gap: 12 }}>
+          {form.kind === "PERSONAL" && (
+            <>
+              <Field label={t("teachingModules.authorLabel")}>
+                <Input value={form.author} maxLength={200} onChange={(e) => setForm({ ...form, author: e.target.value })} placeholder={t("teachingModules.authorPlaceholder")} />
+              </Field>
+              <Field label={t("teachingModules.descriptionLabel")} hint={t("teachingModules.descriptionHint")}>
+                <textarea className="input" rows={3} maxLength={2000} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+              </Field>
+            </>
+          )}
+          <div style={{ display: "grid", gridTemplateColumns: form.kind === "PERSONAL" ? "1fr 1fr" : "1fr 1fr 2fr", gap: 12 }}>
             <Field label={t("teachingModules.codeLabel")} hint={t("teachingModules.codeHint")}>
               <Input value={form.code} maxLength={20} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder={t("teachingModules.codePlaceholder")} />
             </Field>
@@ -592,7 +726,7 @@ export default function ModulesEnseignementPage() {
                 {LANGUAGES.map((l) => <option key={l} value={l}>{t(`teachingModules.language.${l}`)}</option>)}
               </Select>
             </Field>
-            <Field label={t("teachingModules.prerequisiteLabel")} hint={t("teachingModules.prerequisiteHint")}>
+            {form.kind !== "PERSONAL" && <Field label={t("teachingModules.prerequisiteLabel")} hint={t("teachingModules.prerequisiteHint")}>
               <Select
                 value={form.prerequisiteModuleId}
                 disabled={!form.ministryId}
@@ -605,10 +739,10 @@ export default function ModulesEnseignementPage() {
                   <option value={form.prerequisiteModuleId}>{moduleLabel(form.prerequisiteModuleId)}</option>
                 )}
               </Select>
-            </Field>
+            </Field>}
           </div>
           {/* D-ETU-33 / D-ETU-37 (JP 23/10) — recommandations au dirigeant pour l'unité, texte brut. */}
-          <Field label={t("teachingModules.leaderNotesLabel")} hint={t("teachingModules.moduleLeaderNotesHint")}>
+          {form.kind !== "PERSONAL" && <Field label={t("teachingModules.leaderNotesLabel")} hint={t("teachingModules.moduleLeaderNotesHint")}>
             <textarea
               className="input"
               rows={4}
@@ -618,9 +752,9 @@ export default function ModulesEnseignementPage() {
               onChange={(e) => setForm({ ...form, leaderNotes: e.target.value })}
             />
             {leaderNotesTooLong && <span style={{ color: "var(--danger, #b4452f)", fontSize: 13 }}>{t("teachingModules.errLeaderNotesTooLong")}</span>}
-          </Field>
+          </Field>}
 
-          <Field label={t("teachingModules.structureLabel")} hint={hasRead ? t("teachingModules.structureLocked") : t("teachingModules.structureHint")}>
+          <Field label={t("teachingModules.structureLabel")} hint={hasRead ? t("teachingModules.structureLocked") : t(form.kind === "PERSONAL" ? "teachingModules.structureHintPersonal" : "teachingModules.structureHint")}>
             <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: hasRead ? "not-allowed" : "pointer", opacity: hasRead ? 0.6 : 1 }}>
               <Checkbox checked={form.withParts} onChange={setWithParts} />
               <span>{t("teachingModules.withParts")}</span>
@@ -637,7 +771,7 @@ export default function ModulesEnseignementPage() {
                       <span style={{ fontWeight: 600 }}>{t("teachingModules.partLabel")}</span>
                       <Input
                         type="number"
-                        min={1}
+                        min={minNumberOf(form.kind)}
                         style={{ width: 80 }}
                         value={section.number}
                         // RG-ASM-02 — le numéro de partie identifie ses chapitres lus.
@@ -666,6 +800,8 @@ export default function ModulesEnseignementPage() {
                       onChange={(patch) => updateSection(section.key, patch)}
                       onOpenQuestions={editing ? setQuestionsFor : undefined}
                       questionsLockedReason={questionsLockedReason}
+                      kind={form.kind}
+                      personalTools={personalTools}
                     />
                   </div>
                 );
@@ -685,6 +821,8 @@ export default function ModulesEnseignementPage() {
                 onChange={(patch) => updateSection(form.sections[0].key, patch)}
                 onOpenQuestions={editing ? setQuestionsFor : undefined}
                 questionsLockedReason={questionsLockedReason}
+                kind={form.kind}
+                personalTools={personalTools}
               />
             )
           )}
@@ -699,6 +837,19 @@ export default function ModulesEnseignementPage() {
           onClose={() => setQuestionsFor(null)}
           onSaved={(count) => {
             onQuestionsSaved(questionsFor.id!, count);
+            invalidate();
+          }}
+        />
+      )}
+
+      {editing && contentFor?.id && (
+        <ChapterContentPreview
+          module={editing}
+          chapter={contentFor}
+          chapterId={contentFor.id}
+          onClose={() => setContentFor(null)}
+          onSaved={(c) => {
+            patchChapterRow(c.chapterId, { hasContent: !!c.content?.length, readingMinutes: c.readingMinutes });
             invalidate();
           }}
         />
@@ -740,13 +891,23 @@ const contentInvalidStyle = {
   overflowY: "auto",
 } as const;
 
+/** D-FIN-13 / D-FIN-16 (JP 06/11) — ce qu'un chapitre d'un parcours enregistré propose en plus du numéro et du titre. */
+interface PersonalChapterTools {
+  videos: AdminTeachingVideo[];
+  /** Non nul : numérotation modifiée, la ligne ne désigne plus forcément le chapitre enregistré. */
+  lockedReason: string | null;
+  linking: boolean;
+  onOpenContent: (row: ChapterRow) => void;
+  onLinkVideo: (chapterId: string, videoId: string | null) => void;
+}
+
 /**
  * Chapitres d'un bloc (une partie, ou le module entier sans parties) : saisie rapide « de … à … »
  * et lignes numéro + titre + portion. RG-ASM-02 / RG-ETU-23 : un chapitre lu ou étudié se renomme,
  * ne se retire pas. D-ETU-15 — bouton « Questions (n) » vers l'éditeur de la leçon.
  */
 function ChaptersEditor({
-  section, onChange, onOpenQuestions, questionsLockedReason,
+  section, onChange, onOpenQuestions, questionsLockedReason, kind, personalTools,
 }: {
   section: SectionRow;
   onChange: (patch: Partial<SectionRow>) => void;
@@ -754,9 +915,14 @@ function ChaptersEditor({
   onOpenQuestions?: (row: ChapterRow) => void;
   /** Non nul : numérotation modifiée, à enregistrer avant d'ouvrir les questions. */
   questionsLockedReason: string | null;
+  /** D-FIN-01 (JP 06/11) — parcours personnel : ni portion, ni questions, ni notes (contrat FIN §4.3). */
+  kind: TeachingModuleKind;
+  personalTools?: PersonalChapterTools;
 }) {
   const { t } = useTranslation();
   const chapters = section.chapters;
+  const personal = kind === "PERSONAL";
+  const minNumber = minNumberOf(kind);
   /** D-ETU-33 — lignes dont les recommandations / actions sont dépliées. */
   const [notesOpen, setNotesOpen] = useState<Set<string>>(() => new Set());
   const toggleNotes = (key: string) =>
@@ -771,7 +937,7 @@ function ChaptersEditor({
   // numéros communs. RG-ASM-02 : un chapitre déjà lu hors de la plage est conservé.
   const from = parseNumber(section.rangeFrom);
   const to = parseNumber(section.rangeTo);
-  const rangeValid = from != null && to != null && to >= from && to - from < 500;
+  const rangeValid = from != null && from >= minNumber && to != null && to >= from && to - from < 500;
   const generate = () => {
     if (!rangeValid) return;
     const byNumber = new Map(chapters.map((c) => [parseNumber(c.number), c]));
@@ -797,16 +963,16 @@ function ChaptersEditor({
 
   const removeRow = (key: string) => onChange({ chapters: chapters.filter((c) => c.key !== key) });
 
-  const errorKey = chaptersErrorKey(chapters);
+  const errorKey = chaptersErrorKey(chapters, kind);
 
   return (
     <>
       <Field label={t("teachingModules.quickEntryLabel")} hint={t("teachingModules.quickEntryHint")}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <span>{t("teachingModules.rangeFrom")}</span>
-          <Input type="number" min={1} style={{ width: 90 }} value={section.rangeFrom} onChange={(e) => onChange({ rangeFrom: e.target.value })} />
+          <Input type="number" min={minNumber} style={{ width: 90 }} value={section.rangeFrom} onChange={(e) => onChange({ rangeFrom: e.target.value })} />
           <span>{t("teachingModules.rangeTo")}</span>
-          <Input type="number" min={1} style={{ width: 90 }} value={section.rangeTo} onChange={(e) => onChange({ rangeTo: e.target.value })} />
+          <Input type="number" min={minNumber} style={{ width: 90 }} value={section.rangeTo} onChange={(e) => onChange({ rangeTo: e.target.value })} />
           <Button variant="secondary" onClick={generate} disabled={!rangeValid}>{t("teachingModules.generate")}</Button>
         </div>
       </Field>
@@ -824,7 +990,7 @@ function ChaptersEditor({
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <Input
                     type="number"
-                    min={1}
+                    min={minNumber}
                     style={{ width: 70 }}
                     value={c.number}
                     // RG-ASM-02 — le numéro identifie le chapitre : le changer revient à retirer un chapitre lu.
@@ -841,7 +1007,7 @@ function ChaptersEditor({
                     />
                   </div>
                   {/* D-ETU-02 — portion du livre lue avant la leçon. */}
-                  <div style={{ flex: 1, minWidth: 0 }}>
+                  {!personal && <div style={{ flex: 1, minWidth: 0 }}>
                     <Input
                       value={c.portion}
                       maxLength={300}
@@ -849,10 +1015,27 @@ function ChaptersEditor({
                       aria-label={t("teachingModules.portionLabel")}
                       onChange={(e) => updateRow(c.key, { portion: e.target.value })}
                     />
-                  </div>
+                  </div>}
+                  {/* D-FIN-14 (JP 06/11) — un chapitre sans contenu reste au parcours ; le membre le voit « à venir ». */}
+                  {personal && (c.hasContent
+                    ? <Badge tone="ok">{t("teachingModules.minutes", { count: c.readingMinutes ?? 0 })}</Badge>
+                    : <Badge tone="warn">{t("teachingModules.noContentBadge")}</Badge>)}
+                  {c.started && <Badge tone="earth">{t("teachingModules.startedBadge")}</Badge>}
+                  {personalTools && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={!c.id || !!personalTools.lockedReason}
+                      title={!c.id ? t("teachingModules.contentNewChapter") : personalTools.lockedReason ?? t("teachingModules.contentOpen")}
+                      onClick={() => personalTools.onOpenContent(c)}
+                      style={{ whiteSpace: "nowrap" }}
+                    >
+                      {t("teachingModules.contentButton")}
+                    </Button>
+                  )}
                   {c.read && <Badge tone="earth">{t("teachingModules.readBadge")}</Badge>}
                   {c.studied && <Badge tone="green">{t("teachingModules.studiedBadge")}</Badge>}
-                  {onOpenQuestions && (
+                  {!personal && onOpenQuestions && (
                     <Button
                       variant="ghost"
                       size="sm"
@@ -865,7 +1048,7 @@ function ChaptersEditor({
                     </Button>
                   )}
                   {/* D-ETU-33 (JP 23/10) — recommandations au dirigeant et actions des membres de la leçon. */}
-                  <Button
+                  {!personal && <Button
                     variant="ghost"
                     size="sm"
                     title={t("teachingModules.notesToggleTitle")}
@@ -873,16 +1056,38 @@ function ChaptersEditor({
                     style={{ whiteSpace: "nowrap" }}
                   >
                     {t("teachingModules.notesButton", { count: notesCount })}
-                  </Button>
+                  </Button>}
                   <IconButton
                     icon={<Icons.Trash size={14} />}
                     danger
                     disabled={locked}
-                    title={c.read ? t("teachingModules.cannotRemoveRead") : c.studied ? t("teachingModules.cannotRemoveStudied") : t("teachingModules.removeChapter")}
+                    title={c.read ? t("teachingModules.cannotRemoveRead") : c.studied ? t("teachingModules.cannotRemoveStudied") : c.started ? t("teachingModules.cannotRemoveStarted") : t("teachingModules.removeChapter")}
                     onClick={() => !locked && removeRow(c.key)}
                   />
                 </div>
-                {expanded && (
+                {/* D-FIN-16 (JP 06/11) — tout statut se lie : le membre ne voit qu'une vidéo publiée, le statut le rappelle. */}
+                {personalTools && c.id && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: 78, paddingBottom: 6, fontSize: 12.5, color: "var(--ink-500)" }}>
+                    <span style={{ whiteSpace: "nowrap" }}>{t("teachingModules.videoLabel")}</span>
+                    <Select
+                      value={c.videoId ?? ""}
+                      disabled={personalTools.linking || !!personalTools.lockedReason}
+                      aria-label={t("teachingModules.videoLabel")}
+                      style={{ flex: 1, minWidth: 0 }}
+                      onChange={(e) => personalTools.onLinkVideo(c.id!, e.target.value || null)}
+                    >
+                      <option value="">{t("teachingModules.noVideo")}</option>
+                      {personalTools.videos.map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.status === "PUBLISHED" ? v.title : `${v.title} (${t(`teachingVideos.status.${v.status}`)})`}
+                        </option>
+                      ))}
+                      {/* Vidéo enregistrée hors de la liste (chargement en cours) : on garde la valeur. */}
+                      {c.videoId && !personalTools.videos.some((v) => v.id === c.videoId) && <option value={c.videoId}>{t("common.loading")}</option>}
+                    </Select>
+                  </div>
+                )}
+                {!personal && expanded && (
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginLeft: 78, paddingBottom: 6 }}>
                     <Field label={t("teachingModules.leaderNotesLabel")} hint={t("teachingModules.lessonLeaderNotesHint")}>
                       <textarea
@@ -915,6 +1120,156 @@ function ChaptersEditor({
         </div>
       </Field>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Aperçu du contenu d'un chapitre — D-FIN-13 (JP 06/11), contrat FIN §7.3.
+// ---------------------------------------------------------------------------------------------
+
+/** Texte brut (contrat §3.1) : rendu par React, aucun HTML interprété. */
+function Runs({ runs }: { runs: TeachingRun[] | null | undefined }) {
+  return (
+    <>
+      {(runs ?? []).map((r, i) => (
+        <span key={i} style={{ fontWeight: r.bold ? 600 : undefined, fontStyle: r.italic ? "italic" : undefined }}>{r.text}</span>
+      ))}
+    </>
+  );
+}
+
+function BlockView({ block }: { block: TeachingBlock }) {
+  switch (block.type) {
+    case "h2":
+      return <h3 style={{ fontFamily: "var(--font-serif)", fontWeight: 500, fontSize: 18, color: "var(--green-800)", margin: "14px 0 6px" }}><Runs runs={block.runs} /></h3>;
+    case "h3":
+      return <h4 style={{ fontWeight: 600, fontSize: 15, color: "var(--ink-900)", margin: "10px 0 4px" }}><Runs runs={block.runs} /></h4>;
+    case "verse":
+      return (
+        <blockquote style={{ margin: "8px 0", padding: "6px 12px", borderLeft: "3px solid var(--green-800)", color: "var(--ink-700)", fontFamily: "var(--font-serif)" }}>
+          <Runs runs={block.runs} />
+          {block.reference && <div style={{ fontFamily: "var(--font-sans, inherit)", fontSize: 12.5, color: "var(--ink-500)", marginTop: 4 }}>{block.reference}</div>}
+        </blockquote>
+      );
+    case "list":
+      return <ul style={{ margin: "6px 0", paddingLeft: 20 }}>{(block.items ?? []).map((item, i) => <li key={i}><Runs runs={item} /></li>)}</ul>;
+    default:
+      return <p style={{ margin: "6px 0", color: "var(--ink-700)", lineHeight: 1.55 }}><Runs runs={block.runs} /></p>;
+  }
+}
+
+/** Fichier de remplacement d'un chapitre : la liste de blocs, ou `{ summary, content }` comme une entrée de `lessons`. */
+function chapterFileBody(parsed: unknown): { summary?: string | null; content: TeachingBlock[] } | null {
+  if (Array.isArray(parsed)) return { content: parsed as TeachingBlock[] };
+  const obj = parsed as { summary?: string | null; content?: unknown } | null;
+  if (obj && typeof obj === "object" && Array.isArray(obj.content)) {
+    return { summary: typeof obj.summary === "string" ? obj.summary : undefined, content: obj.content as TeachingBlock[] };
+  }
+  return null;
+}
+
+function ChapterContentPreview({
+  module, chapter, chapterId, onClose, onSaved,
+}: {
+  module: TeachingModuleResponse;
+  chapter: ChapterRow;
+  chapterId: string;
+  onClose: () => void;
+  onSaved: (content: TeachingChapterContentAdmin) => void;
+}) {
+  const { t } = useTranslation();
+  const { push } = useToasts();
+  const qc = useQueryClient();
+  const queryKey = ["teaching-chapter-content", chapterId];
+  const [fileError, setFileError] = useState<string | null>(null);
+
+  // Pas de cache partagé : le texte d'un chapitre est lourd, et chaque ouverture relit le serveur.
+  const contentQ = useQuery({
+    queryKey,
+    queryFn: () => getChapterContent(module.id, chapterId),
+    gcTime: 0,
+    refetchOnWindowFocus: false,
+  });
+
+  const replaceM = useMutation({
+    mutationFn: (body: { summary?: string | null; content: TeachingBlock[] }) => putChapterContent(module.id, chapterId, body),
+    onSuccess: (saved) => {
+      setFileError(null);
+      qc.setQueryData(queryKey, saved);
+      onSaved(saved);
+      push({ kind: "ok", title: t("teachingModules.content.savedToast"), msg: chapter.title.trim() });
+    },
+    onError: (e: unknown) => setFileError(errorText(e, t)),
+  });
+
+  // Le chapitre 26 (D-FIN-14) et les corrections arrivent après l'import du module : un code déjà pris refuse un nouvel import.
+  const pickFile = async (input: HTMLInputElement) => {
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) return;
+    setFileError(null);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await file.text());
+    } catch {
+      setFileError(t("teachingModules.import.errNotJson"));
+      return;
+    }
+    const body = chapterFileBody(parsed);
+    if (!body) {
+      setFileError(t("teachingModules.content.errShape"));
+      return;
+    }
+    replaceM.mutate(body);
+  };
+
+  const data = contentQ.data;
+  const blocks = data?.content ?? [];
+  const title = chapter.title.trim();
+  const heading = parseNumber(chapter.number) === 0
+    ? title || t("teachingModules.content.introduction")
+    : [t("teachingModules.content.chapter", { number: chapter.number }), title].filter(Boolean).join(" · ");
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      size="lg"
+      title={heading}
+      sub={module.name}
+      footer={
+        <>
+          <label className="btn secondary" style={{ marginRight: "auto", cursor: replaceM.isPending ? "not-allowed" : "pointer" }}>
+            <span className="ico"><Icons.Upload size={14} /></span>
+            {replaceM.isPending ? t("common.saving") : t("teachingModules.content.replace")}
+            <input type="file" accept="application/json,.json" hidden disabled={replaceM.isPending} onChange={(e) => void pickFile(e.target)} />
+          </label>
+          <Button variant="primary" onClick={onClose}>{t("common.close")}</Button>
+        </>
+      }
+    >
+      {fileError && <div style={{ ...contentInvalidStyle, marginBottom: 12 }}>{fileError}</div>}
+      {contentQ.isError ? (
+        <div style={{ color: "var(--err)" }}>{errorText(contentQ.error, t)}</div>
+      ) : !data ? (
+        <div style={{ color: "var(--ink-500)" }}>{t("common.loading")}</div>
+      ) : (
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+            {blocks.length > 0
+              ? <Badge tone="ok">{t("teachingModules.minutes", { count: data.readingMinutes ?? 0 })}</Badge>
+              : <Badge tone="warn">{t("teachingModules.noContentBadge")}</Badge>}
+            <span style={{ fontSize: 12.5, color: "var(--ink-500)" }}>{t("teachingModules.content.readOnlyHint")}</span>
+          </div>
+          {data.summary && (
+            <p style={{ margin: "0 0 12px", padding: "8px 12px", background: "var(--line-soft)", borderRadius: 8, color: "var(--ink-700)", whiteSpace: "pre-wrap" }}>{data.summary}</p>
+          )}
+          {blocks.length === 0
+            ? <p style={{ color: "var(--ink-500)" }}>{t("teachingModules.content.empty")}</p>
+            : blocks.map((b, i) => <BlockView key={i} block={b} />)}
+        </div>
+      )}
+    </Modal>
   );
 }
 
@@ -1535,7 +1890,11 @@ function ImportModal({
       return;
     }
     const obj = parsed as Partial<StudyImportRequest> | null;
-    if (!obj || typeof obj !== "object" || Array.isArray(obj) || !Array.isArray(obj.lessons) || obj.lessons.length === 0) {
+    // Contrat FIN §7.4 — `parts` n'existe que sur un parcours personnel ; le serveur reste juge (422 CHAPTERS_OR_PARTS_REQUIRED).
+    const hasLessons = Array.isArray(obj?.lessons) && obj.lessons.length > 0;
+    const hasParts = obj?.kind === "PERSONAL" && Array.isArray(obj.parts) && obj.parts.length > 0
+      && obj.parts.every((p) => Array.isArray(p?.lessons));
+    if (!obj || typeof obj !== "object" || Array.isArray(obj) || (!hasLessons && !hasParts)) {
       setFileError(t("teachingModules.import.errShape"));
       return;
     }
@@ -1555,10 +1914,23 @@ function ImportModal({
     onError: (e: unknown) => setSubmitError(errorText(e, t)),
   });
 
-  const questionTotal = (data?.lessons ?? []).reduce((n, l) => n + (Array.isArray(l?.questions) ? l.questions.length : 0), 0);
+  const personal = data?.kind === "PERSONAL";
+  // D-FIN-13 (JP 06/11) — mêmes lignes, avec ou sans parties : seul l'aperçu les parcourt, le fichier part tel quel.
+  const allLessons: StudyImportLesson[] = [...(data?.parts ?? []).flatMap((p) => p.lessons), ...(data?.lessons ?? [])];
+  const hasBlocks = (l: StudyImportLesson) => Array.isArray(l?.content) && l.content.length > 0;
+  const comingSoon = allLessons.filter((l) => !hasBlocks(l)).length;
+  const lessonRow = (l: StudyImportLesson, i: number) => (
+    <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 0" }}>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        {l?.number === 0 ? l.title || t("teachingModules.content.introduction") : [t("teachingModules.content.chapter", { number: l?.number }), l?.title].filter(Boolean).join(" · ")}
+      </span>
+      {!hasBlocks(l) && <Badge tone="warn">{t("teachingModules.noContentBadge")}</Badge>}
+    </div>
+  );
+  const questionTotal = allLessons.reduce((n, l) => n + (Array.isArray(l?.questions) ? l.questions.length : 0), 0);
   // D-ETU-33 (JP 23/10) — aperçu seulement : le fichier part tel quel (leaderNotes, memberActions).
-  const lessonsWithNotes = (data?.lessons ?? []).filter((l) => typeof l?.leaderNotes === "string" && l.leaderNotes.trim()).length;
-  const actionTotal = (data?.lessons ?? []).reduce((n, l) => n + (Array.isArray(l?.memberActions) ? l.memberActions.length : 0), 0);
+  const lessonsWithNotes = allLessons.filter((l) => typeof l?.leaderNotes === "string" && l.leaderNotes.trim()).length;
+  const actionTotal = allLessons.reduce((n, l) => n + (Array.isArray(l?.memberActions) ? l.memberActions.length : 0), 0);
   const moduleHasNotes = typeof data?.leaderNotes === "string" && !!data.leaderNotes.trim();
 
   return (
@@ -1616,11 +1988,35 @@ function ImportModal({
               {data.code && <span style={{ fontFamily: "var(--font-mono)", marginRight: 8 }}>{data.code}</span>}
               {data.name || "—"}
               <span style={{ marginLeft: 8 }}><Badge tone={(fileLanguage ?? language) === "EN" ? "earth" : "gray"}>{fileLanguage ?? language}</Badge></span>
+              <span style={{ marginLeft: 6 }}><Badge tone={personal ? "green" : "gray"}>{t(`teachingModules.kind.${personal ? "PERSONAL" : "ASSEMBLY"}`)}</Badge></span>
             </div>
             <div>{data.bookTitle || "—"}</div>
-            <div style={{ marginTop: 4 }}>
-              {t("teachingModules.import.lessonCount", { count: data.lessons.length })} · {t("teachingModules.questionCount", { count: questionTotal })}
-            </div>
+            {personal && data.author && <div style={{ color: "var(--ink-500)" }}>{data.author}</div>}
+            {personal ? (
+              <>
+                <div style={{ marginTop: 4 }}>
+                  {(data.parts?.length ?? 0) > 0 && <>{t("teachingModules.partCount", { count: data.parts!.length })} · </>}
+                  {t("teachingModules.chapterCount", { count: allLessons.length })}
+                  {comingSoon > 0 && <> · {t("teachingModules.noContentCount", { count: comingSoon })}</>}
+                </div>
+                {/* Contrat FIN §11.3 — aperçu de l'import : parties, chapitres, « à venir ». */}
+                <div style={{ marginTop: 8, maxHeight: 240, overflowY: "auto" }}>
+                  {(data.parts ?? []).map((p, i) => (
+                    <div key={i} style={{ marginBottom: 6 }}>
+                      {p.number !== 0 && (
+                        <div style={{ fontWeight: 600, color: "var(--ink-900)" }}>{[t("teachingModules.content.part", { number: p.number }), p.title].filter(Boolean).join(" · ")}</div>
+                      )}
+                      {p.lessons.map(lessonRow)}
+                    </div>
+                  ))}
+                  {(data.lessons ?? []).map(lessonRow)}
+                </div>
+              </>
+            ) : (
+              <div style={{ marginTop: 4 }}>
+                {t("teachingModules.import.lessonCount", { count: allLessons.length })} · {t("teachingModules.questionCount", { count: questionTotal })}
+              </div>
+            )}
             {(moduleHasNotes || lessonsWithNotes > 0 || actionTotal > 0) && (
               <div style={{ marginTop: 4, color: "var(--ink-500)" }}>
                 {moduleHasNotes && <>{t("teachingModules.import.moduleNotes")} · </>}

@@ -28,6 +28,8 @@ const NAV: NavSection[] = [
       { id: "facturation", labelKey: "nav.invoicing", icon: "Tag", path: "/facturation" },
       // D-ASM-10 (JP 23/09) — référentiel des modules d'enseignement, à côté des Abonnements (§6.1).
       { id: "modules-enseignement", labelKey: "nav.teachingModules", icon: "Folder", path: "/modules-enseignement" },
+      // D-FIN-16 (JP 06/11) — vidéos des parcours individuels, à côté des modules qui les utilisent (contrat FIN §11.3).
+      { id: "videos-enseignement", labelKey: "nav.teachingVideos", icon: "Video", path: "/videos-enseignement" },
       // RG-EVT-01 (JP 14/10) — catalogue des types d'évènement, à côté des modules d'enseignement (§6.1).
       { id: "types-evenement", labelKey: "nav.eventTypes", icon: "Calendar", path: "/types-evenement" },
       // D-DOC-07 (JP 18/10) — documents partagés par lien + catégories, à côté des types d'évènement (§6.1).

@@ -1427,6 +1427,7 @@ function OffersTab() {
   const { push } = useToasts();
   const q = useQuery({ queryKey: ["billing", "offers"], queryFn: listOffers });
   // D-ABO-16 — codes de droit = `sub_module.code` (catalogue des modules, page /abonnements).
+  // D-FIN-08 (JP 06/11) — ENSEIGNEMENT_SUIVI y arrive par sa ligne `sub_module` (billing/12) : proposé ci-dessous, sans liste en dur.
   const modulesQ = useQuery({ queryKey: ["modules"], queryFn: listModules });
   const [editing, setEditing] = useState<AdminOffer | "new" | null>(null);
   const [form, setForm] = useState<OfferForm>(OFFER_EMPTY);
