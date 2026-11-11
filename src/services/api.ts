@@ -18,7 +18,17 @@ export function authHeaders(extra?: HeadersInit): HeadersInit {
  * texte du message : celui-ci est traduit et reformulé, il ne fait pas contrat.
  */
 export class ApiRequestError extends Error {
-  constructor(message: string, readonly code: string | null, readonly status: number) {
+  constructor(
+    message: string,
+    readonly code: string | null,
+    readonly status: number,
+    /**
+     * Données complémentaires d'`ApiError` (`details`, ex. `BRANDING_CONTRAST_TOO_LOW` → `{ foreground, background,
+     * ratio, minimum }` — RG-PAYS-10, JP 11/11) et erreurs de champ d'un 400 (`validationErrors`). null si absentes.
+     */
+    readonly details: Record<string, unknown> | null = null,
+    readonly validationErrors: Record<string, string> | null = null,
+  ) {
     super(message);
     this.name = "ApiRequestError";
   }
@@ -27,6 +37,11 @@ export class ApiRequestError extends Error {
 /** Code métier d'une erreur d'API, ou `null` si l'échec n'en portait pas. */
 export function apiErrorCode(e: unknown): string | null {
   return e instanceof ApiRequestError ? e.code : null;
+}
+
+/** `details` d'une erreur d'API (map d'`ApiError`), ou `null`. */
+export function apiErrorDetails(e: unknown): Record<string, unknown> | null {
+  return e instanceof ApiRequestError ? e.details : null;
 }
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -85,7 +100,9 @@ async function readResponse<T>(res: Response): Promise<T> {
     let body: any = null;
     try { body = await res.json(); } catch { /* not json */ }
     const message = body?.message || body?.detail || `HTTP ${res.status}`;
-    throw new ApiRequestError(message, body?.error ?? null, res.status);
+    const details = body?.details && typeof body.details === "object" ? body.details : null;
+    const validationErrors = body?.validationErrors && typeof body.validationErrors === "object" ? body.validationErrors : null;
+    throw new ApiRequestError(message, body?.error ?? null, res.status, details, validationErrors);
   }
   if (res.status === 204) return undefined as T;
   // 202 / 200 sans corps (D-ABO-09 : `POST /admin/billing/invoices/{n}/resend` répond 202 vide).

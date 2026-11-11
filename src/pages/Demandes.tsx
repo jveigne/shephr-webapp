@@ -157,7 +157,15 @@ export default function DemandesPage() {
     {
       label: t("joinRequests.colDate"),
       render: (r: JoinRequestResponse) => (
-        <span style={{ color: "var(--ink-500)" }}>{fmtDateTime(r.createdAt, dateLocale)}</span>
+        <span style={{ color: "var(--ink-500)" }}>
+          {fmtDateTime(r.createdAt, dateLocale)}
+          {/* RG-PAYS-12 (JP 11/11, lot conf-pays) — consentement RGPD de la demande, lecture seule. */}
+          <span style={{ display: "block", fontSize: 12 }}>
+            {r.consentAt
+              ? t("joinRequests.consentAt", { date: fmtDateTime(r.consentAt, dateLocale) })
+              : t("joinRequests.consentNone")}
+          </span>
+        </span>
       ),
     },
     {

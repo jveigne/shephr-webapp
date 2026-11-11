@@ -7,7 +7,7 @@ import { apiFetch } from "./api";
 export type JoinRequestRole = "MEMBER" | "LEADER";
 export type JoinRequestStatus = "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
 
-// Mirrors JoinRequestResponse (backend).
+// Mirrors com.excellence.back.org.joinrequest.dto.JoinRequestResponse (backend).
 export interface JoinRequestResponse {
   id: string;
   userId: string;
@@ -25,6 +25,11 @@ export interface JoinRequestResponse {
   decisionReason: string | null;
   createdAt: string;
   decidedAt: string | null;
+  /**
+   * RG-PAYS-12 (JP 11/11, lot conf-pays) — consentement RGPD horodaté à l'envoi (« J'accepte que mon appartenance à
+   * cette assemblée soit visible par ses dirigeants. »). null pour les demandes antérieures au lot. Lecture seule.
+   */
+  consentAt: string | null;
 }
 
 export function fetchPendingJoinRequests(): Promise<JoinRequestResponse[]> {

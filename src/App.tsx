@@ -21,6 +21,7 @@ import DocumentsPage from "@/pages/Documents";
 import AuditPage from "@/pages/Audit";
 import SupervisionPage from "@/pages/Supervision";
 import SettingsPage from "@/pages/Settings";
+import PaysPage from "@/pages/Pays";
 
 const queryClient = new QueryClient();
 
@@ -61,6 +62,8 @@ export default function App() {
               {/* Back-office JExcellence — cross-tenant, SUPER_ADMIN only */}
               <Route path="/ministeres" element={<Shielded><MinisteresPage /></Shielded>} />
               <Route path="/structure" element={<Shielded><StructurePage /></Shielded>} />
+              {/* D-PAYS-02 (JP 11/11, lot conf-pays) — configuration par pays (couleurs, nom, texte d'accueil), §6.3 de la spec */}
+              <Route path="/pays" element={<Shielded><PaysPage /></Shielded>} />
               <Route path="/demandes" element={<Shielded><DemandesPage /></Shielded>} />
               <Route path="/utilisateurs" element={<Shielded><UtilisateursPage /></Shielded>} />
               {/* D-HIE-08 (JP 28/10) — historique des demandes de supervision, lecture seule (§7.3 du plan Hiérarchie) */}

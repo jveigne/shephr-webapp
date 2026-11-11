@@ -46,7 +46,8 @@
     "eventTypes": "Types d'évènement",
     "documents": "Documents",
     "invoicing": "Facturation",
-    "supervision": "Supervision"
+    "supervision": "Supervision",
+    "countries": "Pays"
   },
   "requests": {
     "title": "Demandes de structure",
@@ -96,7 +97,9 @@
     "rejectSub": "Le motif sera visible par le demandeur dans son suivi de demandes.",
     "rejectReason": "Motif du refus",
     "rejectReasonPlaceholder": "Ex. : assemblée erronée, demande à refaire…",
-    "rejectConfirm": "Refuser la demande"
+    "rejectConfirm": "Refuser la demande",
+    "consentAt": "Consentement donné le {{date}}",
+    "consentNone": "Sans consentement enregistré (demande antérieure)"
   },
   "login": {
     "quote": "« Donner avec joie, ",
@@ -1252,7 +1255,10 @@
       "changeBeneficiaryHint": "Formule personnelle : le payeur est le bénéficiaire. Le changer transfère les statistiques de hiérarchie à un autre dirigeant.",
       "ministryFromUser": "Ministère du dirigeant bénéficiaire : il ne se modifie pas sur un abonnement de formule.",
       "graceHintUser": "Impayé : le dirigeant garde l'accès aux statistiques de sa hiérarchie jusqu'au {{date}} (14 jours de grâce), puis il se ferme si Stripe n'a pas encaissé.",
-      "cancelBodyPlanUser": "À la fin de la période payée ({{date}}), l'abonnement s'arrête sans nouveau prélèvement ; le dirigeant garde l'accès aux statistiques de sa hiérarchie jusque-là, même en cas de résiliation immédiate (la période payée reste due). Le statut est mis à jour à la réception de l'événement Stripe."
+      "cancelBodyPlanUser": "À la fin de la période payée ({{date}}), l'abonnement s'arrête sans nouveau prélèvement ; le dirigeant garde l'accès aux statistiques de sa hiérarchie jusque-là, même en cas de résiliation immédiate (la période payée reste due). Le statut est mis à jour à la réception de l'événement Stripe.",
+      "graceHintUserNational": "Impayé : le coordinateur garde le suivi de toutes les villes de sa nation jusqu'au {{date}} (14 jours de grâce), puis il se ferme si Stripe n'a pas encaissé.",
+      "changeBeneficiaryHintNational": "Formule personnelle : le payeur est le bénéficiaire. Le changer transfère le suivi national à un autre dirigeant, qui doit être coordinateur national pour en bénéficier.",
+      "cancelBodyPlanUserNational": "À la fin de la période payée ({{date}}), l'abonnement s'arrête sans nouveau prélèvement ; le coordinateur garde le suivi de toutes les villes de sa nation jusque-là, même en cas de résiliation immédiate (la période payée reste due). Le statut est mis à jour à la réception de l'événement Stripe."
     },
     "invoices": {
       "from": "Du",
@@ -1312,7 +1318,7 @@
       "kind": "Type d'offre",
       "kindNone": "Sans formule (n'ouvre rien)",
       "kindLocality": "Formule de ville (ex. Offre Néhémie)",
-      "kindUser": "Formule personnelle de dirigeant (ex. Offre Caleb)",
+      "kindUser": "Formule personnelle de dirigeant (ex. Offre Caleb, Offre Josué)",
       "scopeLocalityHint": "Les codes cochés sont ouverts à la ville abonnée (axe géographique).",
       "scopeUserHint": "Les codes cochés sont ouverts au seul dirigeant abonné, pour les assemblées de sa chaîne de leadership (ex. HIERARCHIE_SUIVI). Réservée aux dirigeants ; n'apparaît pas dans les offres publiques.",
       "localPrice": "Prix local (information)",
@@ -1392,7 +1398,8 @@
       "VOUCHER_WRONG_MINISTRY": "Ce code est lié à un autre ministère.",
       "BILLING_LOCALITY_REQUIRED": "Choisissez la ville.",
       "NOT_LOCALITY_LEADER": "Seul un responsable de cette ville peut activer cette formule.",
-      "MODULE_EXCLUSION_NOT_FREE": "Seul un module gratuit peut être désactivé pour un ministère."
+      "MODULE_EXCLUSION_NOT_FREE": "Seul un module gratuit peut être désactivé pour un ministère.",
+      "NOT_NATIONAL_LEADER": "Seul un coordinateur national (dirigeant de nation) peut souscrire l'offre Josué."
     },
     "allCities": "Toutes les villes",
     "source": {
@@ -1432,7 +1439,11 @@
       "leader": "Dirigeant bénéficiaire",
       "leaderHint": "Recherche par nom, identifiant ou email dans le ministère ; seuls les dirigeants (assemblée à nation) sont proposés.",
       "pickMinistryFirst": "Choisissez d'abord un ministère pour rechercher le dirigeant.",
-      "endBodyUser": "« À la date de fin » : le dirigeant garde l'accès aux statistiques de sa hiérarchie jusqu'au {{date}} inclus. « Immédiatement » : l'accès se ferme tout de suite."
+      "endBodyUser": "« À la date de fin » : le dirigeant garde l'accès aux statistiques de sa hiérarchie jusqu'au {{date}} inclus. « Immédiatement » : l'accès se ferme tout de suite.",
+      "subUserNational": "Sans paiement en ligne (virement, accord) : aucune facture n'est émise. Offre Josué : le coordinateur national choisi accède au suivi de l'étude, au Journal et aux Évènements détaillés de toutes les villes de sa nation jusqu'à la date de fin incluse.",
+      "leaderHintNational": "Recherche par nom, identifiant ou email dans le ministère. L'offre Josué ne couvre que les nations dont le compte est coordinateur national (DIRIGEANT_COORDINATEUR).",
+      "endBodyUserNational": "« À la date de fin » : le coordinateur garde le suivi de toutes les villes de sa nation jusqu'au {{date}} inclus. « Immédiatement » : l'accès se ferme tout de suite.",
+      "notCoordinatorWarning": "{{name}} n'est pas coordinateur national : l'activation est acceptée, mais elle ne couvrira aucune ville tant que ce compte n'est pas DIRIGEANT_COORDINATEUR d'une nation."
     },
     "scope": {
       "label": "Portée",
@@ -1441,7 +1452,8 @@
     },
     "planNames": {
       "DIRIGEANT_HIERARCHIE": "Le suivi de ma hiérarchie",
-      "EGLISE_VILLE": "Le suivi de toute ma ville"
+      "EGLISE_VILLE": "Le suivi de toute ma ville",
+      "SUIVI_NATIONAL": "Le suivi de toute ma nation"
     },
     "vouchers": {
       "hint": "Codes prépayés (Mobile Money, Afrique) : chaque lot est lié à un ministère et à une offre à formule. Un code saisi sur l'espace web ouvre la formule pour la durée choisie, ou prolonge un abonnement voucher en cours. Aucune facture.",
@@ -1490,7 +1502,8 @@
         "ACTIVE": "Disponible",
         "USED": "Utilisé",
         "REVOKED": "Révoqué"
-      }
+      },
+      "scopeUserHintNational": "Offre Josué (personnelle) : seul un coordinateur national peut saisir le code ; il couvre toutes les villes de sa nation."
     },
     "common": {
       "currency": "Devise"
@@ -1502,7 +1515,7 @@
       "tab": "Expirent bientôt",
       "windowLabel": "Délai",
       "window": "Dans les {{days}} jours",
-      "hint": "Offres Caleb et Néhémie : fin manuelle (Manuel, Voucher), fin de période (Stripe résilié), fin de grâce (impayé). Dates Europe/Paris.",
+      "hint": "Offres Caleb, Néhémie et Josué : fin manuelle (Manuel, Voucher), fin de période (Stripe résilié), fin de grâce (impayé). Dates Europe/Paris.",
       "col": {
         "beneficiary": "Bénéficiaire",
         "offer": "Offre",
@@ -1572,6 +1585,118 @@
       "CANCELED": "Annulée",
       "REVOKED": "Retirée",
       "REPLACED": "Remplacée"
+    }
+  },
+  "countryBranding": {
+    "title": "Configuration par pays",
+    "intro": "Couleurs, nom affiché et texte d'accueil de l'app pour un pays de la CMCI. Une configuration active est servie aux apps : le mobile l'applique au lancement suivant, le web au rechargement de la page — sans publication sur les stores. Le logo est un fichier intégré aux apps (pas de téléversement). La mise en place se facture hors application ; décocher « Active » ramène le pays en Shephr standard, rien n'est supprimé.",
+    "empty": "Aucun pays actif dans la CMCI.",
+    "colCountry": "Pays",
+    "colStatus": "Configuration",
+    "colVersion": "Version",
+    "colUpdatedAt": "Mise à jour",
+    "status": {
+      "none": "Non configuré",
+      "active": "Active",
+      "draft": "Brouillon (inactive)"
+    },
+    "configure": "Configurer",
+    "edit": "Modifier",
+    "back": "Retour à la liste",
+    "editorTitle": "Configuration — {{name}}",
+    "active": "Active (servie aux apps)",
+    "activeHint": "Active : toutes les paires de contraste doivent atteindre 4,5:1. Les apps l'appliquent au lancement suivant (mobile) ou au rechargement (web).",
+    "draftHint": "Inactive : brouillon, enregistrable même avec des contrastes insuffisants ; les apps restent en Shephr standard pour ce pays.",
+    "versionInfo": "Version {{version}} · enregistrée le {{date}}",
+    "sectionIdentity": "Identité",
+    "sectionColors": "Couleurs (mode clair)",
+    "sectionContrast": "Contraste",
+    "sectionWelcome": "Texte d'accueil",
+    "displayName": "Nom affiché",
+    "displayNameHint": "Remplace « Shephr » dans l'en-tête et l'accueil (pas dans les e-mails ni les factures). {{count}} / {{max}}",
+    "shortName": "Nom court",
+    "shortNameHint": "Barres étroites (onglets, barre du haut). {{count}} / {{max}}",
+    "website": "Lien du site",
+    "websiteHint": "Facultatif ; https:// seulement.",
+    "logoHint": "Logo : fichier intégré aux apps pour le code {{iso}} (pas de téléversement) ; sans fichier, les apps affichent le logo Shephr aux couleurs du pays.",
+    "colorsHint": "Sélecteur ou code hexadécimal « #RRGGBB ». Les nuances (survol, teintes) sont calculées par les apps à partir de ces rôles ; les couleurs d'état (succès, erreur, alerte) et les polices restent celles de Shephr.",
+    "resetColors": "Revenir à la palette Shephr",
+    "roles": {
+      "principale": "Principale",
+      "texteSurPrincipale": "Texte sur principale",
+      "accent": "Accent",
+      "texteSurAccent": "Texte sur accent",
+      "fond": "Fond",
+      "surface": "Surface",
+      "champ": "Champ",
+      "texte": "Texte",
+      "texteDiscret": "Texte discret",
+      "bordure": "Bordure"
+    },
+    "roleHints": {
+      "principale": "En-tête, liens, onglet actif, boutons secondaires.",
+      "texteSurPrincipale": "Texte et icônes posés sur la principale.",
+      "accent": "Bouton d'action principal.",
+      "texteSurAccent": "Texte du bouton d'action (jamais de blanc sur un accent clair).",
+      "fond": "Fond des écrans.",
+      "surface": "Cartes, bandeaux, barre d'onglets.",
+      "champ": "Fond des champs de saisie.",
+      "texte": "Texte courant.",
+      "texteDiscret": "Légendes, textes secondaires.",
+      "bordure": "Séparateurs, contours."
+    },
+    "contrastHint": "Ratio WCAG, minimum {{min}}:1 sur chaque paire — même calcul que le serveur.",
+    "contrastOk": "Conforme",
+    "contrastFail": "Insuffisant",
+    "contrastDraft": "Contraste insuffisant : enregistrable en brouillon seulement, l'activation sera refusée.",
+    "welcome": {
+      "fr": "Français",
+      "en": "Anglais",
+      "required": "obligatoire",
+      "optional": "facultatif (titre et texte ensemble)",
+      "title": "Titre",
+      "text": "Texte"
+    },
+    "counter": "{{count}} / {{max}}",
+    "check": {
+      "title": "À corriger avant d'enregistrer",
+      "displayName": "Nom affiché : 1 à {{max}} caractères.",
+      "shortName": "Nom court : 1 à {{max}} caractères.",
+      "colors": "Chaque couleur doit être un code « #RRGGBB » (6 chiffres hexadécimaux).",
+      "welcomeFr": "Texte d'accueil en français obligatoire : titre (1 à {{title}} caractères) et texte (1 à {{text}} caractères).",
+      "welcomeEn": "Texte d'accueil en anglais : renseignez le titre et le texte ensemble, ou laissez les deux vides.",
+      "website": "Lien du site : https://… ({{max}} caractères au plus), ou vide.",
+      "contrast": "Contraste {{pair}} de {{ratio}} : au moins 4,5:1 pour une configuration active."
+    },
+    "savedToast": "Configuration de {{name}} enregistrée",
+    "savedMsg": "Version {{version}}",
+    "preview": {
+      "title": "Aperçu (téléphone)",
+      "namePlaceholder": "Nom affiché",
+      "hello": "Bonjour",
+      "titlePlaceholder": "Titre d'accueil",
+      "textPlaceholder": "Texte d'accueil du pays.",
+      "website": "Visiter notre site",
+      "fieldLabel": "Champ de saisie",
+      "fieldValue": "Votre ville",
+      "primaryButton": "Je participe",
+      "secondaryButton": "Voir le détail",
+      "link": "Un lien",
+      "poweredBy": "propulsé par Shephr",
+      "logoHint": "Logo intégré aux apps (aperçu : initiale)",
+      "enFallback": "Pas de texte anglais : les apps affichent le texte français.",
+      "tabs": {
+        "home": "Accueil",
+        "events": "Évènements",
+        "profile": "Profil"
+      }
+    },
+    "errors": {
+      "BRANDING_CONTRAST_TOO_LOW": "Contraste insuffisant sur la paire {{pair}} ({{ratio}}, minimum 4,5:1) : une configuration active doit passer toutes les paires.",
+      "BRANDING_NOT_FOUND": "Ce pays n'a pas encore de configuration.",
+      "RESOURCE_NOT_FOUND": "Ce pays n'est pas un pays actif de la CMCI.",
+      "INVALID_PARAMETER": "Code pays invalide.",
+      "validation": "Champs refusés par le serveur : {{fields}}"
     }
   }
 }

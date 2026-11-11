@@ -46,6 +46,17 @@ export type BillingSource = "STRIPE" | "MANUEL" | "VOUCHER";
  * Choisie à la création de l'offre, immuable. null = offre sans plan.
  */
 export type PlanScope = "LOCALITY" | "USER";
+/**
+ * D-PAYS-05 (JP 11/11, lot conf-pays) — offre Josué (`josue`, « Le suivi de toute ma nation ») : plan PERSONNEL
+ * (`planScope = USER`) qui ouvre au payeur ETUDE_SUIVI, JOURNAL et EVENEMENTS_SUIVI sur toutes les villes des nations
+ * dont il est `DIRIGEANT_COORDINATEUR` (RG-PAYS-16, calculées à la lecture par le serveur). ⚠ Écart assumé à D-ABO-31 :
+ * personnel ET géographique. Mirrors `com.excellence.back.subscription.entitlement.EntitlementService.PLAN_SUIVI_NATIONAL`.
+ * Activation manuelle et vouchers : existants (contrat 11/11 §7.3) ; le serveur n'ajoute aucun contrôle de rôle à
+ * l'activation manuelle (une couverture vide si le bénéficiaire n'est pas coordinateur) — le back-office avertit.
+ */
+export const PLAN_SUIVI_NATIONAL = "SUIVI_NATIONAL";
+/** Plan Caleb (`dirigeant-hierarchie`), axe CHAÎNE (D-ABO-31). */
+export const PLAN_DIRIGEANT_HIERARCHIE = "DIRIGEANT_HIERARCHIE";
 /** RG-ABO-03 — statut CALCULÉ par le serveur, jamais recalculé ici. */
 export type PromoCodeStatus = "ACTIVE" | "DISABLED" | "UPCOMING" | "EXPIRED" | "EXHAUSTED";
 

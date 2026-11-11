@@ -46,7 +46,8 @@
     "eventTypes": "Event types",
     "documents": "Documents",
     "invoicing": "Invoicing",
-    "supervision": "Supervision"
+    "supervision": "Supervision",
+    "countries": "Countries"
   },
   "requests": {
     "title": "Structure requests",
@@ -96,7 +97,9 @@
     "rejectSub": "The reason will be visible to the requester in their request history.",
     "rejectReason": "Rejection reason",
     "rejectReasonPlaceholder": "E.g.: wrong assembly, request to redo…",
-    "rejectConfirm": "Reject the request"
+    "rejectConfirm": "Reject the request",
+    "consentAt": "Consent given on {{date}}",
+    "consentNone": "No recorded consent (earlier request)"
   },
   "login": {
     "quote": "“Give with joy, ",
@@ -1252,7 +1255,10 @@
       "changeBeneficiaryHint": "Personal plan: the payer is the beneficiary. Changing it moves the hierarchy statistics to another leader.",
       "ministryFromUser": "Ministry of the beneficiary leader: it cannot be changed on a plan subscription.",
       "graceHintUser": "Unpaid: the leader keeps access to their hierarchy statistics until {{date}} (14-day grace period), then it closes if Stripe has not collected payment.",
-      "cancelBodyPlanUser": "At the end of the paid period ({{date}}), the subscription stops with no further charge; the leader keeps access to their hierarchy statistics until then, even with an immediate cancellation (the paid period remains due). The status is updated when the Stripe event is received."
+      "cancelBodyPlanUser": "At the end of the paid period ({{date}}), the subscription stops with no further charge; the leader keeps access to their hierarchy statistics until then, even with an immediate cancellation (the paid period remains due). The status is updated when the Stripe event is received.",
+      "graceHintUserNational": "Unpaid: the coordinator keeps tracking every city of their nation until {{date}} (14-day grace period), then it closes if Stripe has not collected payment.",
+      "changeBeneficiaryHintNational": "Personal plan: the payer is the beneficiary. Changing it moves national tracking to another leader, who must be a national coordinator to benefit from it.",
+      "cancelBodyPlanUserNational": "At the end of the paid period ({{date}}), the subscription stops with no further charge; the coordinator keeps tracking every city of their nation until then, even with an immediate cancellation (the paid period remains due). The status is updated when the Stripe event is received."
     },
     "invoices": {
       "from": "From",
@@ -1312,7 +1318,7 @@
       "kind": "Offer type",
       "kindNone": "No plan (grants nothing)",
       "kindLocality": "City plan (e.g. Nehemiah offer)",
-      "kindUser": "Personal leader plan (e.g. Caleb offer)",
+      "kindUser": "Personal leader plan (e.g. Caleb offer, Joshua offer)",
       "scopeLocalityHint": "The checked codes are granted to the subscribed city (geographic axis).",
       "scopeUserHint": "The checked codes are granted to the subscribed leader only, for the house churches of their leadership chain (e.g. HIERARCHIE_SUIVI). Leaders only; not listed among public offers.",
       "localPrice": "Local price (information)",
@@ -1392,7 +1398,8 @@
       "VOUCHER_WRONG_MINISTRY": "This code belongs to another ministry.",
       "BILLING_LOCALITY_REQUIRED": "Choose the city.",
       "NOT_LOCALITY_LEADER": "Only a leader of this city can activate this plan.",
-      "MODULE_EXCLUSION_NOT_FREE": "Only a free module can be turned off for a ministry."
+      "MODULE_EXCLUSION_NOT_FREE": "Only a free module can be turned off for a ministry.",
+      "NOT_NATIONAL_LEADER": "Only a national coordinator (nation leader) can subscribe to the Joshua offer."
     },
     "allCities": "All cities",
     "source": {
@@ -1432,7 +1439,11 @@
       "leader": "Beneficiary leader",
       "leaderHint": "Search by name, username or email within the ministry; only leaders (house church to nation) are listed.",
       "pickMinistryFirst": "Choose a ministry first to search for the leader.",
-      "endBodyUser": "“At the end date”: the leader keeps access to their hierarchy statistics until {{date}} inclusive. “Immediately”: access closes right away."
+      "endBodyUser": "“At the end date”: the leader keeps access to their hierarchy statistics until {{date}} inclusive. “Immediately”: access closes right away.",
+      "subUserNational": "No online payment (bank transfer, agreement): no invoice is issued. Joshua offer: the chosen national coordinator gets study tracking, the city Journal and detailed Events for every city of their nation until the end date, inclusive.",
+      "leaderHintNational": "Search by name, username or email within the ministry. The Joshua offer only covers the nations where the account is national coordinator (DIRIGEANT_COORDINATEUR).",
+      "endBodyUserNational": "“At the end date”: the coordinator keeps tracking every city of their nation until {{date}} inclusive. “Immediately”: access closes right away.",
+      "notCoordinatorWarning": "{{name}} is not a national coordinator: activation is accepted, but it will cover no city until this account is DIRIGEANT_COORDINATEUR of a nation."
     },
     "scope": {
       "label": "Scope",
@@ -1441,7 +1452,8 @@
     },
     "planNames": {
       "DIRIGEANT_HIERARCHIE": "Tracking my leadership chain",
-      "EGLISE_VILLE": "Tracking my whole city"
+      "EGLISE_VILLE": "Tracking my whole city",
+      "SUIVI_NATIONAL": "Tracking my whole nation"
     },
     "vouchers": {
       "hint": "Prepaid codes (Mobile Money, Africa): each batch is tied to one ministry and one plan offer. A code entered on the web space opens the plan for the chosen duration, or extends a running voucher subscription. No invoice.",
@@ -1490,7 +1502,8 @@
         "ACTIVE": "Available",
         "USED": "Used",
         "REVOKED": "Revoked"
-      }
+      },
+      "scopeUserHintNational": "Joshua offer (personal): only a national coordinator can enter the code; it covers every city of their nation."
     },
     "common": {
       "currency": "Currency"
@@ -1502,7 +1515,7 @@
       "tab": "Expiring soon",
       "windowLabel": "Window",
       "window": "Within {{days}} days",
-      "hint": "Caleb and Néhémie plans: manual end (Manual, Voucher), period end (canceled Stripe), grace end (unpaid). Europe/Paris dates.",
+      "hint": "Caleb, Néhémie and Joshua plans: manual end (Manual, Voucher), period end (canceled Stripe), grace end (unpaid). Europe/Paris dates.",
       "col": {
         "beneficiary": "Beneficiary",
         "offer": "Offer",
@@ -1572,6 +1585,118 @@
       "CANCELED": "Canceled",
       "REVOKED": "Withdrawn",
       "REPLACED": "Replaced"
+    }
+  },
+  "countryBranding": {
+    "title": "Country configuration",
+    "intro": "App colours, display name and welcome text for a CMCI country. An active configuration is served to the apps: mobile applies it at the next launch, web on page reload — no store release needed. The logo is a file built into the apps (no upload). Set-up is invoiced outside the app; unticking “Active” brings the country back to standard Shephr, nothing is deleted.",
+    "empty": "No active country in the CMCI.",
+    "colCountry": "Country",
+    "colStatus": "Configuration",
+    "colVersion": "Version",
+    "colUpdatedAt": "Updated",
+    "status": {
+      "none": "Not configured",
+      "active": "Active",
+      "draft": "Draft (inactive)"
+    },
+    "configure": "Configure",
+    "edit": "Edit",
+    "back": "Back to the list",
+    "editorTitle": "Configuration — {{name}}",
+    "active": "Active (served to the apps)",
+    "activeHint": "Active: every contrast pair must reach 4.5:1. Apps apply it at the next launch (mobile) or on reload (web).",
+    "draftHint": "Inactive: a draft, can be saved even with insufficient contrast; the apps stay on standard Shephr for this country.",
+    "versionInfo": "Version {{version}} · saved on {{date}}",
+    "sectionIdentity": "Identity",
+    "sectionColors": "Colours (light mode)",
+    "sectionContrast": "Contrast",
+    "sectionWelcome": "Welcome text",
+    "displayName": "Display name",
+    "displayNameHint": "Replaces “Shephr” in the header and on the home screen (not in emails or invoices). {{count}} / {{max}}",
+    "shortName": "Short name",
+    "shortNameHint": "Narrow bars (tabs, top bar). {{count}} / {{max}}",
+    "website": "Website link",
+    "websiteHint": "Optional; https:// only.",
+    "logoHint": "Logo: file built into the apps for code {{iso}} (no upload); without a file, the apps show the Shephr logo in the country's colours.",
+    "colorsHint": "Picker or hexadecimal code “#RRGGBB”. Shades (hover, tints) are computed by the apps from these roles; status colours (success, error, warning) and fonts stay Shephr's.",
+    "resetColors": "Back to the Shephr palette",
+    "roles": {
+      "principale": "Primary",
+      "texteSurPrincipale": "Text on primary",
+      "accent": "Accent",
+      "texteSurAccent": "Text on accent",
+      "fond": "Background",
+      "surface": "Surface",
+      "champ": "Field",
+      "texte": "Text",
+      "texteDiscret": "Muted text",
+      "bordure": "Border"
+    },
+    "roleHints": {
+      "principale": "Header, links, active tab, secondary buttons.",
+      "texteSurPrincipale": "Text and icons on the primary colour.",
+      "accent": "Main action button.",
+      "texteSurAccent": "Text of the action button (never white on a light accent).",
+      "fond": "Screen background.",
+      "surface": "Cards, banners, tab bar.",
+      "champ": "Input field background.",
+      "texte": "Body text.",
+      "texteDiscret": "Captions, secondary text.",
+      "bordure": "Separators, outlines."
+    },
+    "contrastHint": "WCAG ratio, at least {{min}}:1 on every pair — same computation as the server.",
+    "contrastOk": "Pass",
+    "contrastFail": "Too low",
+    "contrastDraft": "Insufficient contrast: can only be saved as a draft, activation will be refused.",
+    "welcome": {
+      "fr": "French",
+      "en": "English",
+      "required": "required",
+      "optional": "optional (title and text together)",
+      "title": "Title",
+      "text": "Text"
+    },
+    "counter": "{{count}} / {{max}}",
+    "check": {
+      "title": "To fix before saving",
+      "displayName": "Display name: 1 to {{max}} characters.",
+      "shortName": "Short name: 1 to {{max}} characters.",
+      "colors": "Each colour must be a “#RRGGBB” code (6 hexadecimal digits).",
+      "welcomeFr": "French welcome text required: title (1 to {{title}} characters) and text (1 to {{text}} characters).",
+      "welcomeEn": "English welcome text: fill in both title and text, or leave both empty.",
+      "website": "Website link: https://… (at most {{max}} characters), or empty.",
+      "contrast": "Contrast {{pair}} is {{ratio}}: at least 4.5:1 for an active configuration."
+    },
+    "savedToast": "{{name}} configuration saved",
+    "savedMsg": "Version {{version}}",
+    "preview": {
+      "title": "Preview (phone)",
+      "namePlaceholder": "Display name",
+      "hello": "Hello",
+      "titlePlaceholder": "Welcome title",
+      "textPlaceholder": "Country welcome text.",
+      "website": "Visit our website",
+      "fieldLabel": "Input field",
+      "fieldValue": "Your city",
+      "primaryButton": "I'm attending",
+      "secondaryButton": "See details",
+      "link": "A link",
+      "poweredBy": "powered by Shephr",
+      "logoHint": "Logo built into the apps (preview: initial)",
+      "enFallback": "No English text: the apps show the French text.",
+      "tabs": {
+        "home": "Home",
+        "events": "Events",
+        "profile": "Profile"
+      }
+    },
+    "errors": {
+      "BRANDING_CONTRAST_TOO_LOW": "Insufficient contrast on {{pair}} ({{ratio}}, minimum 4.5:1): an active configuration must pass every pair.",
+      "BRANDING_NOT_FOUND": "This country has no configuration yet.",
+      "RESOURCE_NOT_FOUND": "This country is not an active CMCI country.",
+      "INVALID_PARAMETER": "Invalid country code.",
+      "validation": "Fields refused by the server: {{fields}}"
     }
   }
 }

@@ -43,6 +43,7 @@ import {
   updateOffer,
   updatePromoCode,
   BILLING_CURRENCIES,
+  PLAN_SUIVI_NATIONAL,
   type AdminInvoice,
   type AdminExpiringSubscription,
   type AdminOffer,
@@ -87,6 +88,11 @@ import type { AdminUserResponse, ModuleRole } from "@/services/userService";
 // (défaut 30), calculée et triée par le SERVEUR (`GET /admin/billing/subscriptions/expiring`, Europe/Paris) ;
 // « Prolonger » MANUEL / VOUCHER = PATCH `manualEndDate` existant. L'activation manuelle d'un Caleb individuel
 // (`userId` + date de fin, RG-BER-36) reste dans l'onglet Abonnements.
+// D-PAYS-05 (JP 11/11, lot conf-pays) — offre Josué (`josue`, plan SUIVI_NATIONAL, portée USER) : affichée et activée
+// à la main comme Caleb (activation manuelle d'un dirigeant, vouchers, « Expirent bientôt »), sans écran nouveau
+// (contrat 11/11 §7.3). Seuls changent les textes propres à la formule (`…National`, « toutes les villes de sa
+// nation ») et un AVERTISSEMENT quand le compte choisi n'est pas `DIRIGEANT_COORDINATEUR` (RG-PAYS-15) : le serveur
+// n'ajoute aucun contrôle de rôle à l'activation manuelle, la couverture serait simplement vide (RG-PAYS-16).
 
 type Tab = "overview" | "subscriptions" | "expiring" | "invoices" | "offers" | "promo" | "vouchers";
 const PAGE_SIZE = 25;
@@ -137,6 +143,21 @@ const MANAGER_ROLES: ModuleRole[] = ["DIRIGEANT_UNITE", "DIRIGEANT", "DIRIGEANT_
 function isManagerAccount(u: AdminUserResponse): boolean {
   if (u.superAdmin) return false;
   return (!!u.goalRole && MANAGER_ROLES.includes(u.goalRole)) || (!!u.donationRole && MANAGER_ROLES.includes(u.donationRole));
+}
+/**
+ * RG-PAYS-15 (JP 11/11) — l'offre Josué est réservée au coordinateur national (`DIRIGEANT_COORDINATEUR` en Objectifs
+ * ou en Dons, jamais superAdmin). Sert à AVERTIR (contrat 11/11 §7.3), jamais à bloquer : le serveur reste juge.
+ */
+function isNationalCoordinator(u: Pick<AdminUserResponse, "superAdmin" | "goalRole" | "donationRole">): boolean {
+  if (u.superAdmin) return false;
+  return u.goalRole === "DIRIGEANT_COORDINATEUR" || u.donationRole === "DIRIGEANT_COORDINATEUR";
+}
+/**
+ * D-PAYS-05 (JP 11/11) — clé i18n d'un texte de formule personnelle : variante `…National` pour l'offre Josué
+ * (suivi national), la clé Caleb (statistiques de hiérarchie) sinon.
+ */
+function userPlanKey(key: string, planCode: string | null | undefined): string {
+  return planCode === PLAN_SUIVI_NATIONAL ? `${key}National` : key;
 }
 
 // ---------- Formatage (§6.4 : montants formatés côté client, l'API ne renvoie que des centimes) ----------
@@ -675,10 +696,13 @@ function ManualActivationModal({
   const [endDate, setEndDate] = useState("");
   const [payerId, setPayerId] = useState("");
   const [leaderId, setLeaderId] = useState("");
+  // D-PAYS-05 (JP 11/11) — compte choisi, gardé pour l'avertissement « pas coordinateur » de l'offre Josué.
+  const [leader, setLeader] = useState<AdminUserResponse | null>(null);
   const [notes, setNotes] = useState("");
 
   const ministriesQ = useQuery({ queryKey: ["ministries"], queryFn: listMinistries });
   const plan = planOffers.find((o) => o.planCode === planCode);
+  const isNational = planCode === PLAN_SUIVI_NATIONAL;
   const scope = plan ? offerScope(plan) : null;
   const isUser = scope === "USER";
   const localitiesQ = useQuery({
@@ -687,9 +711,9 @@ function ManualActivationModal({
     enabled: !!ministryId && !isUser,
   });
 
-  useEffect(() => { setLocalityId(""); setPayerId(""); setLeaderId(""); }, [ministryId]);
+  useEffect(() => { setLocalityId(""); setPayerId(""); setLeaderId(""); setLeader(null); }, [ministryId]);
   // Changer de portée vide le bénéficiaire de l'autre portée.
-  useEffect(() => { setLocalityId(""); setLeaderId(""); setPayerId(""); }, [scope]);
+  useEffect(() => { setLocalityId(""); setLeaderId(""); setLeader(null); setPayerId(""); }, [scope]);
   // Les offres peuvent arriver après l'ouverture : on choisit alors la première formule proposée.
   useEffect(() => {
     if (!planCode && planOffers.length > 0) setPlanCode(planOffers.find((o) => o.active)?.planCode ?? planOffers[0].planCode ?? "");
@@ -731,7 +755,7 @@ function ManualActivationModal({
       onClose={onClose}
       size="lg"
       title={t("billing.manual.title")}
-      sub={isUser ? t("billing.manual.subUser") : t("billing.manual.sub")}
+      sub={isUser ? t(userPlanKey("billing.manual.subUser", planCode)) : t("billing.manual.sub")}
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>{t("common.cancel")}</Button>
@@ -793,9 +817,9 @@ function ManualActivationModal({
                 key={ministryId}
                 ministryId={ministryId}
                 label={t("billing.manual.leader")}
-                hint={t("billing.manual.leaderHint")}
+                hint={t(userPlanKey("billing.manual.leaderHint", planCode))}
                 value={leaderId}
-                onChange={(v) => setLeaderId(v)}
+                onChange={(v, u) => { setLeaderId(v); setLeader(u ?? null); }}
                 filter={isManagerAccount}
                 t={t}
               />
@@ -811,6 +835,14 @@ function ManualActivationModal({
               onChange={(v) => setPayerId(v)}
               t={t}
             />
+          )}
+          {/* RG-PAYS-15 / contrat 11/11 §7.3 — avertissement seulement : l'activation reste possible (le serveur
+              l'accepte, la couverture serait vide tant que le compte n'est pas coordinateur national). */}
+          {isUser && isNational && leader && !isNationalCoordinator(leader) && (
+            <div style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 13, color: "var(--warn)" }}>
+              <Icons.Warning size={16} />
+              <span>{t("billing.manual.notCoordinatorWarning", { name: leader.fullName ?? leader.username ?? "—" })}</span>
+            </div>
           )}
           <Field label={t("billing.subs.notes")}>
             <textarea className="input" rows={3} maxLength={2000} value={notes} onChange={(e) => setNotes(e.target.value)} />
@@ -839,9 +871,12 @@ function SubscriptionDrawer({ id, onClose }: { id: string; onClose: () => void }
 
   const [ministryId, setMinistryId] = useState("");
   const [payerId, setPayerId] = useState("");
+  // D-PAYS-05 (JP 11/11) — nouveau bénéficiaire choisi (avertissement « pas coordinateur » de l'offre Josué).
+  const [pickedPayer, setPickedPayer] = useState<AdminUserResponse | null>(null);
   const [notes, setNotes] = useState("");
   const [endDate, setEndDate] = useState("");
   const [cancelOpen, setCancelOpen] = useState(false);
+  const isNationalPlan = s?.planCode === PLAN_SUIVI_NATIONAL;
   const today = todayParis();
 
   // Formulaire réaligné à chaque relecture (après une écriture ou à l'ouverture).
@@ -964,7 +999,7 @@ function SubscriptionDrawer({ id, onClose }: { id: string; onClose: () => void }
             </div>
 
             {grace && (
-              <div style={{ fontSize: 13, color: "var(--ink-500)" }}>{t(isUserPlan ? "billing.subs.graceHintUser" : "billing.subs.graceHint", { date: fmtDate(grace, locale) })}</div>
+              <div style={{ fontSize: 13, color: "var(--ink-500)" }}>{t(isUserPlan ? userPlanKey("billing.subs.graceHintUser", s.planCode) : "billing.subs.graceHint", { date: fmtDate(grace, locale) })}</div>
             )}
 
             {/* RG-ABO-29 (JP 27/10) — prolonger un MANUEL ou un VOUCHER (B-03 / R-BER-10) ; un EXPIRED / CANCELED
@@ -1030,13 +1065,20 @@ function SubscriptionDrawer({ id, onClose }: { id: string; onClose: () => void }
               <RemoteUserCombobox
                 ministryId={isUserPlan ? (s.ministryId ?? undefined) : undefined}
                 filter={isUserPlan ? isManagerAccount : undefined}
-                hint={isUserPlan ? t("billing.subs.changeBeneficiaryHint") : undefined}
+                hint={isUserPlan ? t(userPlanKey("billing.subs.changeBeneficiaryHint", s.planCode)) : undefined}
                 label={t(isUserPlan ? "billing.subs.beneficiaryLeader" : "billing.subs.payer")}
                 value={payerId}
                 selected={s.payerUserId === payerId ? { id: s.payerUserId, fullName: s.payerName ?? "—", username: "", email: s.payerEmail ?? "" } : undefined}
-                onChange={(v) => setPayerId(v)}
+                onChange={(v, u) => { setPayerId(v); setPickedPayer(u ?? null); }}
                 t={t}
               />
+              {/* RG-PAYS-15 — avertissement seulement (contrat 11/11 §7.3), le serveur reste juge. */}
+              {isNationalPlan && pickedPayer && pickedPayer.id === payerId && payerId !== s.payerUserId && !isNationalCoordinator(pickedPayer) && (
+                <div style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 12.5, color: "var(--warn)", margin: "6px 0" }}>
+                  <Icons.Warning size={15} />
+                  <span>{t("billing.manual.notCoordinatorWarning", { name: pickedPayer.fullName ?? pickedPayer.username ?? "—" })}</span>
+                </div>
+              )}
               <Button size="sm" variant="primary" disabled={patchM.isPending || !payerId || payerId === s.payerUserId}
                 onClick={() => patchM.mutate({ payerUserId: payerId })}>
                 {t("billing.subs.savePayer")}
@@ -1101,10 +1143,10 @@ function SubscriptionDrawer({ id, onClose }: { id: string; onClose: () => void }
         <p style={{ margin: 0 }}>
           {offStripe
             ? t(canEndAtTerm
-              ? (isUserPlan ? "billing.manual.endBodyUser" : "billing.manual.endBody")
+              ? (isUserPlan ? userPlanKey("billing.manual.endBodyUser", s?.planCode) : "billing.manual.endBody")
               : "billing.manual.endBodyCanceled", { date: fmtDay(s?.manualEndDate, locale) })
             : s?.planCode
-              ? t(isUserPlan ? "billing.subs.cancelBodyPlanUser" : "billing.subs.cancelBodyPlan", { date: fmtDate(s?.currentPeriodEnd, locale) })
+              ? t(isUserPlan ? userPlanKey("billing.subs.cancelBodyPlanUser", s?.planCode) : "billing.subs.cancelBodyPlan", { date: fmtDate(s?.currentPeriodEnd, locale) })
               : t("billing.subs.cancelBody", { date: fmtDate(s?.currentPeriodEnd, locale) })}
         </p>
       </Modal>
@@ -2109,7 +2151,7 @@ function VoucherBatchModal({
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Field label={t("billing.subs.offer")} hint={scope ? t(scope === "USER" ? "billing.vouchers.scopeUserHint" : "billing.vouchers.scopeLocalityHint") : undefined}>
+            <Field label={t("billing.subs.offer")} hint={scope ? t(scope === "USER" ? userPlanKey("billing.vouchers.scopeUserHint", offer?.planCode) : "billing.vouchers.scopeLocalityHint") : undefined}>
               <Select value={offerCode} onChange={(e) => setOfferCode(e.target.value)}>
                 {planOffers.map((o) => (
                   <option key={o.id} value={o.code}>

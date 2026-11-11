@@ -13,6 +13,8 @@ const NAV: NavSection[] = [
     items: [
       { id: "ministeres", labelKey: "nav.ministries", icon: "Building", path: "/ministeres" },
       { id: "structure", labelKey: "nav.structure", icon: "Hierarchy", path: "/structure" },
+      // D-PAYS-02 (JP 11/11, lot conf-pays) — configuration de l'app par pays (couleurs, nom, texte d'accueil).
+      { id: "pays", labelKey: "nav.countries", icon: "Globe", path: "/pays" },
       { id: "demandes", labelKey: "nav.requests", icon: "Inbox", path: "/demandes" },
       // D-HIE-08 (JP 28/10) — historique des demandes de supervision (chaîne), lecture seule, à côté des Demandes.
       { id: "supervision", labelKey: "nav.supervision", icon: "Hierarchy", path: "/supervision" },
