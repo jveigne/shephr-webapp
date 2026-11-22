@@ -218,6 +218,28 @@ function graceEnd(pastDueSince: string | null): string | null {
 }
 
 /** « 99,99 » / « 99.99 » → 9999 ; NaN si illisible. */
+/**
+ * Raisons pour lesquelles « Enregistrer » est grisé, affichées dans le pied de la fenêtre : sans elles, un bouton
+ * désactivé pour un code mal formé ou un champ manquant passe pour un bouton cassé.
+ */
+function FormBlockers({ items }: { items: string[] }) {
+  const { t } = useTranslation();
+  if (items.length === 0) return null;
+  return (
+    <div style={{ flex: "1 1 0", minWidth: 0, marginRight: "auto", alignSelf: "center", fontSize: 12.5, color: "var(--err)", lineHeight: 1.45 }}>
+      <strong>{t("billing.blockers.title")}</strong> {items.join(" · ")}
+    </div>
+  );
+}
+
+/** Saisie d'un code : accents retirés, espaces et séparateurs ramenés au séparateur admis, autres signes supprimés. */
+function normalizeCode(v: string, kase: "upper" | "lower", sep: "-" | "_"): string {
+  const base = v.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const cased = kase === "upper" ? base.toUpperCase() : base.toLowerCase();
+  const allowed = kase === "upper" ? /[^A-Z0-9_-]/g : /[^a-z0-9_-]/g;
+  return cased.replace(/[\s_-]+/g, sep).replace(allowed, "");
+}
+
 function parseCents(v: string): number {
   const n = Number(v.trim().replace(/\s/g, "").replace(",", "."));
   return Number.isFinite(n) ? Math.round(n * 100) : NaN;
@@ -675,6 +697,8 @@ function ManualActivationModal({
   const [endDate, setEndDate] = useState("");
   const [payerId, setPayerId] = useState("");
   const [leaderId, setLeaderId] = useState("");
+  // Compte choisi dans la recherche serveur : sans lui, le combobox n'a rien à afficher une fois fermé.
+  const [pickedUser, setPickedUser] = useState<AdminUserResponse | undefined>();
   const [notes, setNotes] = useState("");
 
   const ministriesQ = useQuery({ queryKey: ["ministries"], queryFn: listMinistries });
@@ -698,7 +722,15 @@ function ManualActivationModal({
   useEffect(() => { if (period === "ANNUAL" && !plan?.annualPriceCents) setPeriod("MONTHLY"); }, [plan, period]);
 
   const beneficiaryOk = isUser ? !!leaderId : !!localityId;
-  const valid = beneficiaryOk && !!planCode && /^\d{4}-\d{2}-\d{2}$/.test(endDate) && endDate >= today && notes.length <= 2000;
+  const endDateOk = /^\d{4}-\d{2}-\d{2}$/.test(endDate) && endDate >= today;
+  const valid = beneficiaryOk && !!planCode && endDateOk && notes.length <= 2000;
+  const blockers = [
+    !planCode && t("billing.blockers.plan"),
+    !ministryId && t("billing.blockers.ministry"),
+    ministryId && !beneficiaryOk && t(isUser ? "billing.blockers.leader" : "billing.blockers.city"),
+    !endDateOk && t("billing.blockers.endDate", { min: fmtDay(today, locale) }),
+    notes.length > 2000 && t("billing.blockers.notes"),
+  ].filter((x): x is string => !!x);
 
   const createM = useMutation({
     mutationFn: () => {
@@ -734,6 +766,7 @@ function ManualActivationModal({
       sub={isUser ? t("billing.manual.subUser") : t("billing.manual.sub")}
       footer={
         <>
+          {!offersLoading && planOffers.length > 0 && <FormBlockers items={blockers} />}
           <Button variant="ghost" onClick={onClose}>{t("common.cancel")}</Button>
           <Button variant="primary" disabled={!valid || createM.isPending} onClick={() => createM.mutate()}>
             {createM.isPending ? t("common.saving") : t("billing.manual.submit")}
@@ -795,7 +828,8 @@ function ManualActivationModal({
                 label={t("billing.manual.leader")}
                 hint={t("billing.manual.leaderHint")}
                 value={leaderId}
-                onChange={(v) => setLeaderId(v)}
+                selected={pickedUser?.id === leaderId ? pickedUser : undefined}
+                onChange={(v, u) => { setLeaderId(v); setPickedUser(u); }}
                 filter={isManagerAccount}
                 t={t}
               />
@@ -808,7 +842,8 @@ function ManualActivationModal({
               label={t("billing.manual.payer")}
               hint={t("billing.manual.payerHint")}
               value={payerId}
-              onChange={(v) => setPayerId(v)}
+              selected={pickedUser?.id === payerId ? pickedUser : undefined}
+              onChange={(v, u) => { setPayerId(v); setPickedUser(u); }}
               t={t}
             />
           )}
@@ -839,6 +874,7 @@ function SubscriptionDrawer({ id, onClose }: { id: string; onClose: () => void }
 
   const [ministryId, setMinistryId] = useState("");
   const [payerId, setPayerId] = useState("");
+  const [pickedPayer, setPickedPayer] = useState<AdminUserResponse | undefined>();
   const [notes, setNotes] = useState("");
   const [endDate, setEndDate] = useState("");
   const [cancelOpen, setCancelOpen] = useState(false);
@@ -1033,8 +1069,10 @@ function SubscriptionDrawer({ id, onClose }: { id: string; onClose: () => void }
                 hint={isUserPlan ? t("billing.subs.changeBeneficiaryHint") : undefined}
                 label={t(isUserPlan ? "billing.subs.beneficiaryLeader" : "billing.subs.payer")}
                 value={payerId}
-                selected={s.payerUserId === payerId ? { id: s.payerUserId, fullName: s.payerName ?? "—", username: "", email: s.payerEmail ?? "" } : undefined}
-                onChange={(v) => setPayerId(v)}
+                selected={s.payerUserId === payerId
+                  ? { id: s.payerUserId, fullName: s.payerName ?? "—", username: "", email: s.payerEmail ?? "" }
+                  : pickedPayer?.id === payerId ? pickedPayer : undefined}
+                onChange={(v, u) => { setPayerId(v); setPickedPayer(u); }}
                 t={t}
               />
               <Button size="sm" variant="primary" disabled={patchM.isPending || !payerId || payerId === s.payerUserId}
@@ -1224,6 +1262,7 @@ function ExtendExpiringModal({ sub, onClose }: { sub: AdminExpiringSubscription;
   const minEnd = minExtendDate(sub.endDate, today);
   const [endDate, setEndDate] = useState(minEnd);
   const valid = /^\d{4}-\d{2}-\d{2}$/.test(endDate) && endDate >= minEnd;
+  const blockers = valid ? [] : [t("billing.blockers.endDate", { min: fmtDay(minEnd, locale) })];
 
   const patchM = useMutation({
     mutationFn: () => patchBillingSubscription(sub.id, { manualEndDate: endDate }),
@@ -1243,6 +1282,7 @@ function ExtendExpiringModal({ sub, onClose }: { sub: AdminExpiringSubscription;
       sub={`${sub.offerName} · ${sub.planScope === "USER" ? (sub.beneficiaryName ?? sub.payerName ?? "—") : (sub.localityName ?? "—")}`}
       footer={
         <>
+          <FormBlockers items={blockers} />
           <Button variant="ghost" onClick={onClose}>{t("common.cancel")}</Button>
           <Button variant="primary" disabled={!valid || patchM.isPending} onClick={() => patchM.mutate()}>
             {patchM.isPending ? t("common.saving") : t("billing.expiring.extend")}
@@ -1470,6 +1510,17 @@ function OffersTab() {
     && form.localPriceLabel.trim().length <= LOCAL_PRICE_MAX
   );
   const valid = OFFER_CODE_RE.test(form.code) && form.name.trim() !== "" && priceCents > 0 && Number.isFinite(vatRate) && vatRate >= 0 && planValid;
+  const blockers = [
+    !OFFER_CODE_RE.test(form.code) && t("billing.blockers.offerCode"),
+    form.name.trim() === "" && t("billing.blockers.name"),
+    !(priceCents > 0) && t("billing.blockers.price"),
+    !(Number.isFinite(vatRate) && vatRate >= 0) && t("billing.blockers.vat"),
+    form.isPlan && !PLAN_CODE_RE.test(form.planCode) && t("billing.blockers.planCode"),
+    form.isPlan && form.entitlementCodes.length === 0 && t("billing.blockers.entitlements"),
+    form.isPlan && annualCents !== null && !(Number.isFinite(annualCents) && annualCents > 0) && t("billing.blockers.annualPrice"),
+    form.isPlan && !usdValid && t("billing.blockers.usd"),
+    form.isPlan && form.localPriceLabel.trim().length > LOCAL_PRICE_MAX && t("billing.blockers.localPrice"),
+  ].filter((x): x is string => !!x);
   const toggleCode = (code: string, on: boolean) =>
     setForm({ ...form, entitlementCodes: on ? [...form.entitlementCodes, code] : form.entitlementCodes.filter((c) => c !== code) });
 
@@ -1595,6 +1646,7 @@ function OffersTab() {
         sub={t("billing.offers.priceFrozenHint")}
         footer={
           <>
+            <FormBlockers items={blockers} />
             <Button variant="ghost" onClick={() => setEditing(null)}>{t("common.cancel")}</Button>
             <Button variant="primary" disabled={!valid || saveM.isPending} onClick={() => saveM.mutate()}>
               {saveM.isPending ? t("common.saving") : t("common.save")}
@@ -1605,7 +1657,7 @@ function OffersTab() {
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <Field label={t("billing.offers.code")} hint={editing === "new" ? t("billing.offers.codeHint") : t("billing.offers.codeImmutable")}>
             <Input value={form.code} disabled={editing !== "new"} maxLength={40}
-              onChange={(e) => setForm({ ...form, code: e.target.value.toLowerCase() })} />
+              onChange={(e) => setForm({ ...form, code: normalizeCode(e.target.value, "lower", "-") })} />
           </Field>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <Field label={t("billing.offers.nameFr")}><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
@@ -1654,7 +1706,7 @@ function OffersTab() {
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                   <Field label={t("billing.offers.planCode")} hint={editing === "new" ? t("billing.offers.planCodeHint") : t("billing.offers.codeImmutable")}>
                     <Input value={form.planCode} disabled={editing !== "new"} maxLength={40}
-                      onChange={(e) => setForm({ ...form, planCode: e.target.value.toUpperCase() })} />
+                      onChange={(e) => setForm({ ...form, planCode: normalizeCode(e.target.value, "upper", "_") })} />
                   </Field>
                   <Field label={t("billing.offers.annualPriceTtc")}
                     hint={annualCents != null && Number.isFinite(annualCents) && annualCents > 0 ? `${money(annualCents, "EUR", locale)} ${t("billing.per.ANNUAL")}` : t("billing.offers.annualHint")}>
@@ -1752,6 +1804,12 @@ function PromoTab() {
     && (max === null || (Number.isInteger(max) && max > 0))
     // Même contrôle que le serveur (400 PROMO_CODE_INVALID_PERIOD, contrat §12) : fin strictement après le début.
     && !(form.startsAt && form.endsAt && new Date(form.endsAt) <= new Date(form.startsAt));
+  const blockers = [
+    !PROMO_CODE_RE.test(form.code) && t("billing.blockers.promoCode"),
+    !(Number.isInteger(percent) && percent >= 1 && percent <= 90) && t("billing.blockers.percent"),
+    max !== null && !(Number.isInteger(max) && max > 0) && t("billing.blockers.maxRedemptions"),
+    form.startsAt && form.endsAt && new Date(form.endsAt) <= new Date(form.startsAt) && t("billing.blockers.promoPeriod"),
+  ].filter((x): x is string => !!x);
 
   const saveM = useMutation({
     mutationFn: () => {
@@ -1829,6 +1887,7 @@ function PromoTab() {
         sub={t("billing.promo.formHint")}
         footer={
           <>
+            <FormBlockers items={blockers} />
             <Button variant="ghost" onClick={() => setEditing(null)}>{t("common.cancel")}</Button>
             <Button variant="primary" disabled={!valid || saveM.isPending} onClick={() => saveM.mutate()}>
               {saveM.isPending ? t("common.saving") : t("common.save")}
@@ -1840,7 +1899,7 @@ function PromoTab() {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <Field label={t("billing.promo.code")} hint={editing === "new" ? t("billing.promo.codeHint") : t("billing.offers.codeImmutable")}>
               <Input value={form.code} disabled={editing !== "new"} maxLength={32}
-                onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })} />
+                onChange={(e) => setForm({ ...form, code: normalizeCode(e.target.value, "upper", "-") })} />
             </Field>
             <Field label={t("billing.promo.percentOff")} hint={t("billing.promo.percentHint")}>
               <Input type="number" min={1} max={90} value={form.percentOff} onChange={(e) => setForm({ ...form, percentOff: e.target.value })} />
@@ -2068,6 +2127,14 @@ function VoucherBatchModal({
     && Number.isInteger(qty) && qty >= 1 && qty <= VOUCHER_MAX_QUANTITY
     && (!expiresAt || (/^\d{4}-\d{2}-\d{2}$/.test(expiresAt) && expiresAt >= today))
     && label.length <= 200;
+  const blockers = [
+    !offer && t("billing.blockers.offer"),
+    !ministryId && t("billing.blockers.ministry"),
+    !(Number.isInteger(durationDays) && durationDays >= 1 && durationDays <= VOUCHER_MAX_DURATION_DAYS) && t("billing.blockers.duration", { max: VOUCHER_MAX_DURATION_DAYS }),
+    !(Number.isInteger(qty) && qty >= 1 && qty <= VOUCHER_MAX_QUANTITY) && t("billing.blockers.quantity", { max: VOUCHER_MAX_QUANTITY }),
+    expiresAt && !(/^\d{4}-\d{2}-\d{2}$/.test(expiresAt) && expiresAt >= today) && t("billing.blockers.expiresAt"),
+    label.length > 200 && t("billing.blockers.label"),
+  ].filter((x): x is string => !!x);
 
   const createM = useMutation({
     mutationFn: () => createVoucherBatch({
@@ -2093,6 +2160,7 @@ function VoucherBatchModal({
       sub={t("billing.vouchers.createSub")}
       footer={
         <>
+          {!offersLoading && planOffers.length > 0 && <FormBlockers items={blockers} />}
           <Button variant="ghost" onClick={onClose}>{t("common.cancel")}</Button>
           <Button variant="primary" disabled={!valid || createM.isPending} onClick={() => createM.mutate()}>
             {createM.isPending ? t("common.saving") : t("billing.vouchers.generate")}
