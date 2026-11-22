@@ -55,7 +55,9 @@ function ComboboxBase({
       <div style={{ position: "relative" }}>
         <Input
           value={open ? query : (selected ? `${selected.fullName} — ${userLogin(selected)}` : "")}
-          placeholder={open || !emptyOptionLabel ? t("responsables.supervisorSearchPlaceholder") : emptyOptionLabel}
+          // Liste ouverte : le champ sert à la recherche ; le compte déjà choisi reste lisible en filigrane.
+          placeholder={open && selected ? `${selected.fullName} — ${userLogin(selected)}`
+            : open || !emptyOptionLabel ? t("responsables.supervisorSearchPlaceholder") : emptyOptionLabel}
           onFocus={() => { type(""); setOpenState(true); }}
           onChange={(e) => { type(e.target.value); setOpenState(true); }}
           onBlur={() => { type(""); setOpenState(false); }}
